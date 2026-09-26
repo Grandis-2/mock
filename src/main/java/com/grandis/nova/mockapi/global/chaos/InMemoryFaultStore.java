@@ -33,4 +33,14 @@ public class InMemoryFaultStore implements FaultHook {
     public boolean consumeResponseLost(String externalKey) {
         return faults.remove(externalKey, FaultType.RESPONSE_LOST_AFTER_COMMIT);
     }
+
+    /**
+     * 걸려 있는 결함을 모두 버린다. 초기화가 부른다.
+     *
+     * <p>발동하지 않고 남은 결함을 지우는 것이 목적이다. 남겨두면 다음 시험에서 엉뚱한 키의 응답이
+     * 유실되고, 그 시험은 결함을 걸지 않았으므로 원인을 찾기 어렵다.
+     */
+    public void clear() {
+        faults.clear();
+    }
 }
