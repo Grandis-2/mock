@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.admin;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -139,6 +140,31 @@ class MockConfigApiTest {
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
         }
+
+        assertThat(store.applied()).isEqualTo(before);
+    }
+
+    /**
+     * {@code timeoutHoldMs} 는 설정 API 의 필드가 아니라 환경변수다. 워커 읽기 타임아웃에 맞춰
+     * 기동할 때 정하는 값이라 실행 중에 바꾸면 그 순간 붙잡고 있던 요청과 어긋난다.
+     *
+     * <p>조용히 버리면 <b>보낸 사람은 적용된 줄 안다.</b> 유지 시간이 워커 타임아웃보다 짧으면
+     * 워커가 타임아웃 대신 500 을 받아 재현하려던 상황이 아니게 되는데, 설정을 바꿨다고 믿는
+     * 사람은 그 원인을 여기서 찾지 못한다.
+     */
+    @Test
+    @DisplayName("timeoutHoldMs 는 설정 API 로 바꿀 수 없다 — 400 이고 설정도 그대로다")
+    void rejectsTimeoutHoldMs() throws Exception {
+        var before = store.applied();
+
+        mvc.perform(put(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"registerLatencyMs":500,"failureRate":0.05,"timeoutHoldMs":9000}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errorMessage",
+                        containsString("timeoutHoldMs 은(는) 알 수 없는 필드입니다.")));
 
         assertThat(store.applied()).isEqualTo(before);
     }
