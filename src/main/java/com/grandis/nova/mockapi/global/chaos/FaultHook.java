@@ -6,7 +6,7 @@ package com.grandis.nova.mockapi.global.chaos;
  * <p>지금 있는 결함은 "커밋 후 응답 유실" 하나다. 지연·실패율로는 이 상황을 만들 수 없다.
  * 주입한 실패는 모두 커밋 전이라 등록이 저장되지 않기 때문이다.
  *
- * <p>구현은 제어 파트(NV-6)가 맡는다.
+ * <p>구현은 {@link InMemoryFaultStore} 다.
  */
 public interface FaultHook {
 
