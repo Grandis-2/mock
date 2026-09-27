@@ -1,0 +1,115 @@
+package com.grandis.nova.mockapi.load;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
+/**
+ * 부하 시험 실행기. {@code ./gradlew loadTest} 로 돌린다.
+ *
+ * <p>JUnit 시험이 아니다. 일반 빌드에서 같이 돌면 안 되기 때문이다 — 수천 건을 보내는 데 수십 초가
+ * 걸리고, 결과가 환경에 따라 달라 빌드 성패의 기준이 될 수 없다.
+ *
+ * <p><b>Mock 을 미리 띄워 두어야 한다.</b> 이 실행기는 서버를 기동하지 않는다. 부하를 거는 쪽과 받는
+ * 쪽이 같은 JVM 에 있으면 서로 자원을 뺏어 무엇을 측정한 것인지 알 수 없다.
+ *
+ * <p>시나리오는 b-todo Phase 5 의 세 가지다.
+ * <ul>
+ *   <li>{@code baseline} — 기본 설정 그대로. 평소 부하
+ *   <li>{@code latency} — 지연 2000ms · 실패율 0. <b>관측 지연이 설정값과 비슷한지</b> 본다.
+ *       크게 벗어나면 Mock 이 병목이라는 뜻이고, 그러면 본 서비스 측정도 믿을 수 없다
+ *   <li>{@code timeout} — 실패율 1.0 · TIMEOUT. 응답 없는 연결이 쌓이는지 본다
+ * </ul>
+ */
+public final class LoadTestMain {
+
+    private static final String DEFAULT_BASE_URL = "http://localhost:8081";
+    private static final String CONFIG = "/external/config";
+
+    private static final HttpClient CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(3))
+            .build();
+
+    private LoadTestMain() {
+    }
+
+    public static void main(String[] args) throws Exception {
+        String baseUrl = args.length > 0 ? args[0] : DEFAULT_BASE_URL;
+        String scenario = args.length > 1 ? args[1] : "baseline";
+
+        applyScenario(baseUrl, scenario);
+        String configBody = get(baseUrl + CONFIG);
+        int configVersion = readConfigVersion(configBody);
+
+        LoadPlan plan = LoadPlan.draft(baseUrl);
+        System.out.printf("시나리오 %s · %d건 / %s · configVersion %d%n",
+                scenario, plan.totalRequests(), plan.rampUp(), configVersion);
+        System.out.println("설정: " + configBody);
+
+        LoadRunner runner = new LoadRunner(plan);
+        Duration elapsed = runner.run();
+
+        String report = runner.report()
+                .render(plan, configBody, configVersion, runner.maxInFlight(), elapsed);
+        System.out.println();
+        System.out.println(report);
+
+        Path out = Path.of("build", "load",
+                "report-" + scenario + "-"
+                        + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+                        + ".md");
+        Files.createDirectories(out.getParent());
+        Files.writeString(out, report);
+        System.out.println("보고서: " + out.toAbsolutePath());
+    }
+
+    /**
+     * 시나리오에 맞게 Mock 설정을 바꾼다.
+     *
+     * <p>설정 경로에는 지연·실패를 주입하지 않으므로 실패율 1.0 상태에서도 되돌릴 수 있다.
+     */
+    private static void applyScenario(String baseUrl, String scenario) throws Exception {
+        String body = switch (scenario) {
+            case "baseline" -> """
+                    {"registerLatencyMs":500,"failureRate":0.05,"failureMode":"HTTP_5XX"}""";
+            case "latency" -> """
+                    {"registerLatencyMs":2000,"failureRate":0.0,"failureMode":"HTTP_5XX"}""";
+            case "timeout" -> """
+                    {"registerLatencyMs":0,"failureRate":1.0,"failureMode":"TIMEOUT"}""";
+            default -> throw new IllegalArgumentException(
+                    "시나리오는 baseline · latency · timeout 중 하나여야 합니다. 받은 값: " + scenario);
+        };
+
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + CONFIG))
+                .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(5))
+                .PUT(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new IllegalStateException(
+                    "설정 적용 실패 " + response.statusCode() + " — " + response.body());
+        }
+    }
+
+    private static String get(String url) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+        return CLIENT.send(request, HttpResponse.BodyHandlers.ofString()).body();
+    }
+
+    /** 의존성을 늘리지 않으려고 숫자 하나만 긁는다. 보고서에는 설정 전문도 함께 남는다. */
+    private static int readConfigVersion(String configBody) {
+        var matcher = java.util.regex.Pattern.compile("\"configVersion\"\\s*:\\s*(\\d+)")
+                .matcher(configBody);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : -1;
+    }
+}

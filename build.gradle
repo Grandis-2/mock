@@ -45,3 +45,17 @@ tasks.named('test') {
     // CI 는 보통 UTC 라서, 어느 기계에서 돌려도 잡히게 시험은 한국 시간대로 돌린다.
     jvmArgs '-Duser.timezone=Asia/Seoul'
 }
+
+// 부하 시험. JUnit 이 아니라 별도 실행이다 — 수천 건에 수십 초가 걸리고 결과가 환경에 따라
+// 달라서 빌드 성패의 기준이 될 수 없다. `test` 에 섞이면 매 빌드가 그만큼 느려진다.
+//
+//   ./gradlew bootRun                                  (다른 터미널에서 Mock 을 먼저 띄운다)
+//   ./gradlew loadTest --args="http://localhost:8081 baseline"
+//
+// 시나리오는 baseline · latency · timeout 세 가지다.
+tasks.register('loadTest', JavaExec) {
+    group = 'verification'
+    description = '부하 시험을 돌린다. Mock 이 이미 떠 있어야 한다'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.grandis.nova.mockapi.load.LoadTestMain'
+}
