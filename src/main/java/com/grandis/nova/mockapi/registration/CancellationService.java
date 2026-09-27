@@ -39,6 +39,11 @@ public class CancellationService {
     /**
      * 번호만 받은 경우 그 등록의 키. 키가 없으니 표식을 남길 수 없고, 번호는 Mock 이 등록할 때만
      * 발급하므로 그 번호로 늦게 오는 등록도 없다. 없는 번호는 404 로 알린다.
+     *
+     * <p>키 조회와 달리 <b>잠금 없이 읽어도 된다.</b> 키 조회가 {@code FOR SHARE} 인 건 진행 중인 등록을
+     * 못 본 채 404 를 주면 안 되기 때문인데, 번호는 그럴 수가 없다. 번호는 등록 트랜잭션 안에서 만들어지고
+     * 201 은 커밋한 뒤에 나간다(응답 유실 결함도 커밋 뒤, 지연 · 실패는 트랜잭션 전이라 번호가 없다).
+     * 그래서 워커가 아는 번호는 모두 이미 커밋된 번호다.
      */
     private String keyOf(String externalNumber) {
         return repository.findByExternalNumber(externalNumber)

@@ -59,6 +59,9 @@ public class CancellationWriter {
      * 그 번호를 취소했다고 믿는데 실제로는 다른 등록이 꺼지고, 그 번호의 등록은 살아남는다.
      *
      * <p>키에 번호가 없고(미등록 · 표식만) 그 번호의 등록도 없으면 불일치가 아니다. 키로 표식을 남긴다.
+     * {@code reset} 뒤에 워커가 옛 번호를 들고 오는 경우다 — 여기서 막으면 표식을 남길 기회가 사라진다.
+     *
+     * <p>번호는 잠금 없이 읽는다. 워커가 아는 번호는 모두 이미 커밋된 번호다({@link CancellationService} 참고).
      */
     private void requireSameRegistration(String externalNumber, Optional<Registration> keyRow) {
         String keysNumber = keyRow.map(Registration::externalNumber).orElse(null);
