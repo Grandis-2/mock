@@ -52,6 +52,11 @@ public final class LoadReport {
         return counts;
     }
 
+    /** 응답을 받은 요청 수. 0 이면 백분위는 값이 아니라 "측정 불가" 다. */
+    public long responded() {
+        return attempts.stream().filter(a -> a.status() > 0).count();
+    }
+
     public Duration percentile(double p) {
         List<Duration> sorted = attempts.stream()
                 .filter(a -> a.status() > 0)
@@ -136,8 +141,8 @@ public final class LoadReport {
 
         out.append("## 지표\n\n");
         out.append("| 지표 | 값 | 기준 | 판정 |\n| --- | --- | --- | --- |\n");
-        appendMetric(out, "p95", percentile(95), plan.p95Target());
-        appendMetric(out, "p99", percentile(99), plan.p99Target());
+        appendMetric(out, "p95", percentile(95), plan.p95Target(), responded());
+        appendMetric(out, "p99", percentile(99), plan.p99Target(), responded());
         out.append("| 에러율 | ").append(percent(failureRate())).append(" | ")
                 .append(percent(plan.maxFailureRate())).append(" | ")
                 .append(failureRate() <= plan.maxFailureRate() ? "이내" : "초과").append(" |\n");
@@ -158,9 +163,20 @@ public final class LoadReport {
                 .append(percent(ratio)).append(" |\n");
     }
 
-    private static void appendMetric(StringBuilder out, String name, Duration actual, Duration target) {
-        out.append("| ").append(name).append(" | ").append(actual.toMillis()).append("ms | ")
-                .append(target.toMillis()).append("ms | ")
+    /**
+     * 응답이 하나도 없으면 값이 아니라 <b>측정 불가</b>로 적는다.
+     *
+     * <p>0ms 를 기준과 비교하면 "이내" 가 되어, 전부 타임아웃난 최악의 실행이 지연 기준을 통과한
+     * 것처럼 보인다. 요구사항 8장이 실패를 결과에서 빼지 말라고 한 것과 정확히 반대되는 왜곡이다.
+     */
+    private static void appendMetric(StringBuilder out, String name, Duration actual,
+                                     Duration target, long responded) {
+        out.append("| ").append(name).append(" | ");
+        if (responded == 0) {
+            out.append("측정 불가 | ").append(target.toMillis()).append("ms | 응답 0건 |\n");
+            return;
+        }
+        out.append(actual.toMillis()).append("ms | ").append(target.toMillis()).append("ms | ")
                 .append(actual.compareTo(target) <= 0 ? "이내" : "초과").append(" |\n");
     }
 
