@@ -120,14 +120,18 @@ public final class LoadReport {
         out.append("| p95 / p99 기준 | ").append(plan.p95Target()).append(" / ")
                 .append(plan.p99Target()).append(" | 미합의 |\n\n");
 
-        out.append("## 요청 4분류 (요구사항 8장)\n\n");
+        out.append("## 요청 분류 (요구사항 8장)\n\n");
         out.append("합계가 보낸 요청 수와 같아야 한다. 실패와 미전송을 결과에서 빼지 않는다.\n\n");
-        out.append("| 분류 | 건수 | 비율 |\n| --- | --- | --- |\n");
-        appendCount(out, "접수 성공", counts.get(Outcome.ACCEPTED));
-        appendCount(out, "명시적 거절", counts.get(Outcome.REJECTED));
-        appendCount(out, "**결과 불명**", counts.get(Outcome.UNKNOWN));
-        appendCount(out, "미전송", counts.get(Outcome.NOT_SENT));
-        out.append("| 합계 | ").append(total()).append(" | 100.0% |\n\n");
+        out.append("8장의 네 분류에서 **명시적 거절을 둘로 나눴다.** 400 · 409 · 422 는 다시 보내도\n")
+                .append("결과가 같은 확정 거절이고, 5xx 는 재시도 대상이라 본 서비스가 할 일이 정반대다.\n")
+                .append("합쳐 두면 설정한 실패율이 실제로 몇 % 나왔는지가 거절 수에 묻힌다.\n\n");
+        out.append("| 분류 | 건수 | 비율 | 8장 분류 |\n| --- | --- | --- | --- |\n");
+        appendCount(out, "접수 성공", counts.get(Outcome.ACCEPTED), "접수 성공");
+        appendCount(out, "명시적 거절 (400 · 409 · 422)", counts.get(Outcome.REJECTED), "명시적 거절");
+        appendCount(out, "일시 실패 (5xx)", counts.get(Outcome.TRANSIENT_FAILURE), "명시적 거절");
+        appendCount(out, "**결과 불명**", counts.get(Outcome.UNKNOWN), "결과 불명");
+        appendCount(out, "미전송", counts.get(Outcome.NOT_SENT), "미전송");
+        out.append("| 합계 | ").append(total()).append(" | 100.0% | |\n\n");
 
         out.append("## 거절 내역 (응답을 받은 것)\n\n");
         if (byStatus().isEmpty()) {
@@ -157,10 +161,10 @@ public final class LoadReport {
         return out.toString();
     }
 
-    private void appendCount(StringBuilder out, String label, int count) {
+    private void appendCount(StringBuilder out, String label, int count, String chapter8) {
         double ratio = total() == 0 ? 0 : (double) count / total();
         out.append("| ").append(label).append(" | ").append(count).append(" | ")
-                .append(percent(ratio)).append(" |\n");
+                .append(percent(ratio)).append(" | ").append(chapter8).append(" |\n");
     }
 
     /**

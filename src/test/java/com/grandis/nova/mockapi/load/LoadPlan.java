@@ -34,6 +34,19 @@ public record LoadPlan(
 ) {
 
     /**
+     * <b>관찰 종료 조건은 요청 하나의 응답 타임아웃보다 길어야 한다.</b> 짧으면 아직 자기 타임아웃이
+     * 오지 않은 요청이 관찰 창 때문에 잘려 결과 불명으로 세어진다. 측정하려던 것이 아니라 시험
+     * 설정이 만들어낸 숫자가 되므로, 조건을 바꿀 때 실수하지 않게 여기서 막는다.
+     */
+    public LoadPlan {
+        if (drainTimeout.compareTo(responseTimeout) <= 0) {
+            throw new IllegalArgumentException(
+                    "관찰 종료 조건(%s)은 응답 타임아웃(%s)보다 길어야 합니다"
+                            .formatted(drainTimeout, responseTimeout));
+        }
+    }
+
+    /**
      * 과제 예시 기준의 임시 계획. 합의 전까지 구조를 확인하는 용도다.
      *
      * <p>{@code responseTimeout} 3초는 명세가 워커 읽기 타임아웃으로 가정한 값이다. 실제 값이
