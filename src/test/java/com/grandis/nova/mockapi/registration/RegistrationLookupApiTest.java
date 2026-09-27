@@ -80,7 +80,7 @@ class RegistrationLookupApiTest {
         return json.readTree(body);
     }
 
-    /** 취소 API 는 NV-23 이라 원장을 직접 취소한다. */
+    /** 응답의 시각 형식을 글자 그대로 비교하려고 시각을 정해 원장을 직접 취소한다. 취소 API 는 {@link CancellationApiTest}. */
     private void cancel(String key) {
         tx.executeWithoutResult(status -> repository.findById(key).orElseThrow().cancel(CANCELED_AT));
     }
