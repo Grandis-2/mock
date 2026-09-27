@@ -39,7 +39,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -68,9 +67,6 @@ class RegistrationApiTest {
 
     @Autowired
     private RegistrationRepository repository;
-
-    @Autowired
-    private TransactionTemplate tx;
 
     @Autowired
     private MockConfigStore store;
@@ -202,9 +198,11 @@ class RegistrationApiTest {
     void registerCancelRegister() throws Exception {
         String key = newKey();
         String number = bodyOf(register(key, BODY)).get("externalNumber").asString();
-        // 취소 API 는 NV-23 이라 원장을 직접 취소한다
-        tx.executeWithoutResult(status ->
-                repository.findById(key).orElseThrow().cancel(Instant.now()));
+        mvc.perform(post("/external/cancellations")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"externalKey":"%s"}""".formatted(key)))
+                .andExpect(status().isOk());
 
         register(key, BODY)
                 .andExpect(status().isConflict())
@@ -313,10 +311,10 @@ class RegistrationApiTest {
         register(key, BODY)
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"))
-                .andExpect(jsonPath("$.errorMessage").value(RegistrationService.RETRY_EXHAUSTED));
+                .andExpect(jsonPath("$.errorMessage").value(DuplicateKeyRetry.RETRY_EXHAUSTED));
 
         // 첫 키 1번 + 둘째 키 상한만큼
-        verify(numbers, times(1 + RegistrationService.MAX_ATTEMPTS)).next(any());
+        verify(numbers, times(1 + DuplicateKeyRetry.MAX_ATTEMPTS)).next(any());
         assertThat(repository.findById(key)).isEmpty();
     }
 

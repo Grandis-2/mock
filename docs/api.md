@@ -451,8 +451,8 @@ Accept: application/json
 
 ### 요구사항
 
-- 외부 키 또는 외부 예약번호로 활성 등록을 비활성화한다. (과제 명세)
-- 업무상 거절이 없다. **미등록·이미 취소된 대상도 200 이다.**
+- 외부 키 또는 외부 예약번호로 활성 등록을 비활성화한다. (기능명세)
+- 업무상 거절이 없다(과제: "잘못 등록된 예약을 되돌리는 용도, 항상 성공 가정"). **키로 취소하면 미등록·이미 취소된 대상도 200 이다.**
 - 키 취소는 등록이 없어도 취소 표식을 영속 저장한다.
 - 표식이 있는 키의 지연 도착 등록은 `KEY_CANCELED` 로 거절된다.
 - 반복 호출의 업무 효과는 한 번이다.
@@ -471,8 +471,8 @@ Accept: application/json
 
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `externalKey` | string | 조건부 | 우리 `preorder_token` |
-| `externalNumber` | string | 조건부 | Mock 이 발급한 번호 |
+| `externalKey` | string | 조건부 | 우리 `preorder_token`. 1~100자 |
+| `externalNumber` | string | 조건부 | Mock 이 발급한 번호. 1~100자 |
 | `reason` | string | 선택 | `USER_CANCEL` · `ADMIN_CANCEL` · `DEADLINE_EXCEEDED` · `RETRY_EXHAUSTED` · `GHOST_COMPENSATION` 등. **저장하지 않는다** (ERD 에 칸 없음) |
 
 ```json
@@ -490,9 +490,10 @@ Accept: application/json
 3. 이미 취소된 등록이면 아무것도 바꾸지 않는다.
 4. **등록 기록이 없어도 취소 표식 행을 만든다.** 같은 새 키를 등록 요청이 먼저 INSERT 했으면 1062 를 받으므로, 다시 잠금 읽기로 조회해 2단계부터 한다.
 5. 지연 구간에서 기다리던 등록이 뒤늦게 진행돼도 표식 때문에 활성화되지 못한다.
-6. `externalNumber` 만 받았으면 그 번호의 등록을 비활성화하고 그 등록의 키에도 표식을 남긴다.
-7. 이번 호출로 실제 비활성화한 등록이 있었는지를 `hadActiveRegistration` 으로 알린다.
-8. 취소된 행을 재활성화하지 않는다.
+6. `externalNumber` 만 받았으면 그 번호의 등록을 찾아 그 키로 1~3단계를 한다. **그 번호의 등록이 없으면 404 다.** 키가 없어 표식을 남길 수 없고, 번호는 Mock 이 등록할 때만 발급하므로 그 번호로 늦게 오는 등록도 없다.
+7. 둘 다 받았으면 **같은 등록을 가리켜야 한다.** 키의 등록 번호가 다르거나 그 번호가 다른 키의 등록이면 400 이고 아무것도 바꾸지 않는다. 키만 보고 취소하면 워커는 그 번호를 취소했다고 믿는데 다른 등록이 꺼지기 때문이다. 키에 번호가 없고 그 번호의 등록도 없으면 키로 처리한다.
+8. 이번 호출로 실제 비활성화한 등록이 있었는지를 `hadActiveRegistration` 으로 알린다.
+9. 취소된 행을 재활성화하지 않는다.
 
 ### Response
 
@@ -527,6 +528,9 @@ Accept: application/json
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
 | 400 | `INVALID_REQUEST` | `externalKey` 와 `externalNumber` 가 둘 다 없음 |
+| 400 | `INVALID_REQUEST` | 키 · 번호가 비었거나 100자를 넘음 |
+| 400 | `INVALID_REQUEST` | 키와 번호가 서로 다른 등록을 가리킴 |
+| 404 | `NOT_FOUND` | 번호만 받았는데 그 번호의 등록이 없음 |
 
 ### 확인 시나리오
 
@@ -537,7 +541,8 @@ Accept: application/json
 | 등록 성공 → 취소 | `hadActiveRegistration: true` · `status: CANCELED` |
 | **지연 중 등록 → 취소 → 지연 종료** | **취소가 즉시 200. 뒤늦게 진행된 등록이 `KEY_CANCELED`** |
 | 취소(미등록 키) → 지연 등록 도착 | 409 `KEY_CANCELED`. 등록 생성 안 됨 |
-| 같은 대상 취소 2회 | 둘 다 200. 2회차 `hadActiveRegistration: false` |
+| 같은 대상 취소 2회 | 둘 다 200. 2회차 `hadActiveRegistration: false`. 취소 시각 그대로 |
+| 같은 새 키로 등록 · 취소 동시 | 취소는 모두 200. 최종 활성 0. 끈 등록은 등록이 있었을 때만 1건 |
 
 > 두 번째 시나리오는 `registerLatencyMs` 를 크게 잡아 만든다. 지연이 락 밖이라 그 사이 취소가 표식을 남긴다.
 > DB 에서 보면 세 번째 시나리오와 순서가 같다.

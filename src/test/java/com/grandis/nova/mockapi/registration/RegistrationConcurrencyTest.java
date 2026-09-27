@@ -4,9 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
+import com.grandis.nova.mockapi.global.chaos.FailureInjector;
+import com.grandis.nova.mockapi.global.error.ErrorCode;
+import com.grandis.nova.mockapi.global.error.MockException;
 import com.grandis.nova.mockapi.registration.dto.RegisterRequest;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -16,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -42,7 +47,8 @@ import org.testcontainers.utility.MountableFile;
  * 같은 키 동시 요청을 <b>진짜 MySQL</b> 로 본다.
  *
  * <p>멱등 등록은 잠금 읽기와 중복 키(1062)에 기댄다. H2 는 둘 다 다르게 동작하므로 여기서 통과해야
- * 의미가 있다. 키 조회가 진행 중인 등록을 기다리는지도 잠금 동작이라 여기서 본다. 스키마는
+ * 의미가 있다. 키 조회가 진행 중인 등록을 기다리는지, 등록과 취소가 엇갈려도 취소가 이기는지도
+ * 잠금 · 중복 키 동작이라 여기서 본다. 스키마는
  * {@code docs/schema.sql} 을 그대로 넣고({@code ddl-auto=validate} 로 엔티티와 맞는지도 확인된다),
  * 서버 격리 수준은 compose 와 같은 READ COMMITTED 다.
  *
@@ -99,8 +105,15 @@ class RegistrationConcurrencyTest {
     @Autowired
     private MockMvc mvc;
 
+    @Autowired
+    private CancellationService cancellations;
+
     @MockitoSpyBean
     private ExternalNumberGenerator numbers;
+
+    /** 등록을 지연 구간에서 붙잡는 데 쓴다. 붙잡지 않는 시험에서는 원래대로 동작한다. */
+    @MockitoSpyBean
+    private FailureInjector failureInjector;
 
     @Test
     @DisplayName("커넥션 격리 수준이 READ COMMITTED 다 — 1062 를 정상 분기로 다루는 설계의 전제")
@@ -287,5 +300,110 @@ class RegistrationConcurrencyTest {
                 .andReturn().getResponse().getStatus()).isEqualTo(404);
         assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
                 .andReturn().getResponse().getStatus()).isEqualTo(200);
+    }
+
+    /**
+     * 명세의 "지연 중 등록 → 취소 → 지연 종료". 지연은 락 밖이라 그 사이 취소가 표식을 남기고, 뒤늦게
+     * 진행된 등록은 표식에 막힌다. 표식이 없으면 "취소 성공" 이라고 답해놓고 등록이 살아난다.
+     *
+     * <p>설정 지연을 크게 잡는 대신 등록을 지연 구간(트랜잭션 밖)에서 붙잡아, 시간에 기대지 않고 이 순서를
+     * 정확히 만든다.
+     */
+    @Test
+    @DisplayName("지연 중 등록 → 취소 → 지연 종료 - 취소는 기다리지 않고 성공, 늦게 진행된 등록은 KEY_CANCELED")
+    void cancelDuringRegistrationLatency() throws Exception {
+        String key = UUID.randomUUID().toString();
+        var inLatency = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            inLatency.countDown();
+            awaitQuietly(release);
+            return invocation.callRealMethod();
+        }).when(failureInjector).apply(any());
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<RegisterResult> registration = pool.submit(() -> service.register(key, REQUEST));
+                assertThat(inLatency.await(10, TimeUnit.SECONDS)).isTrue();
+
+                // 등록이 지연 중이어도 취소는 잠금을 기다리지 않는다
+                CancelResult canceled = pool.submit(() -> cancellations.cancel(key, null))
+                        .get(5, TimeUnit.SECONDS);
+                assertThat(canceled.hadActiveRegistration()).isFalse();
+
+                release.countDown();
+                assertThatThrownBy(() -> registration.get(10, TimeUnit.SECONDS))
+                        .isInstanceOf(ExecutionException.class)
+                        .cause()
+                        .isInstanceOfSatisfying(MockException.class,
+                                e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.KEY_CANCELED));
+            } finally {
+                release.countDown();
+            }
+        }
+
+        assertThat(repository.findById(key)).get()
+                .satisfies(saved -> {
+                    assertThat(saved.isCanceled()).isTrue();
+                    assertThat(saved.externalNumber()).isNull();
+                });
+    }
+
+    /**
+     * 같은 새 키로 등록과 취소가 동시에 들어오면 READ COMMITTED 에는 갭 락이 없어 둘 다 "없음" 을 보고
+     * INSERT 로 간다. 진 쪽은 중복 키를 받아 다시 시도해야 한다. 어떤 순서로 엇갈려도 취소는 모두
+     * 성공하고, 끝나면 활성 등록이 없어야 한다.
+     */
+    @Test
+    @DisplayName("같은 새 키로 등록 5 · 취소 5 동시 × 100회 - 취소는 모두 성공, 최종 활성 0, 끈 등록은 있었을 때만 1건")
+    void registerAndCancelConcurrently() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            String key = UUID.randomUUID().toString();
+            var start = new CountDownLatch(1);
+            List<Future<RegisterResult>> registrations = new ArrayList<>();
+            List<Future<CancelResult>> cancels = new ArrayList<>();
+            try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                for (int i = 0; i < CONCURRENT / 2; i++) {
+                    registrations.add(pool.submit(() -> {
+                        start.await();
+                        return service.register(key, REQUEST);
+                    }));
+                    cancels.add(pool.submit(() -> {
+                        start.await();
+                        return cancellations.cancel(key, null);
+                    }));
+                }
+                start.countDown();
+            }
+
+            // 등록은 취소보다 먼저 커밋했으면 201(재생 포함), 늦었으면 409 다
+            List<String> registeredNumbers = new ArrayList<>();
+            for (Future<RegisterResult> registration : registrations) {
+                try {
+                    registeredNumbers.add(registration.get().registration().externalNumber());
+                } catch (ExecutionException e) {
+                    assertThat(e.getCause()).as("round %d", round)
+                            .isInstanceOfSatisfying(MockException.class,
+                                    mock -> assertThat(mock.errorCode()).isEqualTo(ErrorCode.KEY_CANCELED));
+                }
+            }
+            // 취소는 하나도 실패하면 안 된다 — 실패했으면 get() 이 여기서 터진다
+            long turnedOff = 0;
+            for (Future<CancelResult> cancel : cancels) {
+                if (cancel.get().hadActiveRegistration()) {
+                    turnedOff++;
+                }
+            }
+
+            Registration saved = repository.findById(key).orElseThrow();
+            assertThat(saved.isCanceled()).as("round %d", round).isTrue();
+            if (registeredNumbers.isEmpty()) {
+                assertThat(saved.externalNumber()).as("round %d", round).isNull();
+                assertThat(turnedOff).as("round %d", round).isZero();
+            } else {
+                assertThat(registeredNumbers).as("round %d", round).containsOnly(saved.externalNumber());
+                assertThat(turnedOff).as("round %d", round).isEqualTo(1);
+            }
+        }
     }
 }
