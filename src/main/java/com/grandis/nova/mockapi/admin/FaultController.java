@@ -5,6 +5,7 @@ import com.grandis.nova.mockapi.admin.dto.FaultResponse;
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import jakarta.validation.Valid;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -43,6 +44,8 @@ public class FaultController {
     @ResponseStatus(HttpStatus.CREATED)
     public FaultResponse inject(@Valid @RequestBody FaultRequest request) {
         store.inject(request.externalKey(), request.faultType());
-        return new FaultResponse(request.externalKey(), request.faultType(), Instant.now());
+        // 시각은 밀리초까지다. 등록 원장이 저장·응답을 맞추려고 자르는 것과 같은 자리수로 맞춘다.
+        return new FaultResponse(request.externalKey(), request.faultType(),
+                Instant.now().truncatedTo(ChronoUnit.MILLIS));
     }
 }

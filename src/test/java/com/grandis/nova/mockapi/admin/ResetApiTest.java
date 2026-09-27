@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.admin;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -22,6 +23,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
@@ -50,11 +53,15 @@ class ResetApiTest {
     @Autowired
     private RegistrationRepository repository;
 
-    @Autowired
+    /** 지우기와 결함 비우기의 순서를 보려면 {@code clear()} 가 불리는 순간을 가로채야 한다. */
+    @MockitoSpyBean
     private InMemoryFaultStore faults;
 
     @Autowired
     private FaultHook faultHook;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @Autowired
     private MockConfigStore config;
@@ -200,5 +207,32 @@ class ResetApiTest {
     @DisplayName("등록 처리가 보는 FaultHook 이 초기화가 비우는 그 보관소다")
     void faultHookIsTheStore() {
         assertThat(faultHook).isSameAs(faults);
+    }
+
+    /**
+     * 결함을 마지막에 지운다는 약속이 실제로 지켜지는지 본다.
+     *
+     * <p>{@code deleteAll()} 은 행을 읽어와 표시만 하고 DELETE 를 커밋까지 미룬다. 그러면 코드
+     * 순서는 맞는데 <b>실제로는 결함이 먼저 사라진다.</b> 리뷰에서 잡힌 문제이고, 눈으로는 보이지
+     * 않아 여기서 명시적으로 확인한다.
+     *
+     * <p>JPA 가 아니라 {@link JdbcTemplate} 으로 센다. 같은 트랜잭션·같은 커넥션이면서 영속성
+     * 컨텍스트의 flush 를 유발하지 않아, 그 시점에 DB 에 실제로 남아 있는 행만 보인다.
+     */
+    @Test
+    @DisplayName("결함을 비우는 시점에 등록 행은 이미 지워져 있다")
+    void rowsAreGoneBeforeFaultsAreCleared() throws Exception {
+        saveActive("reset-order-1");
+        saveActive("reset-order-2");
+        long[] rowsWhenCleared = new long[1];
+        doAnswer(invocation -> {
+            rowsWhenCleared[0] = jdbc.queryForObject(
+                    "select count(*) from preorder_registrations", Long.class);
+            return invocation.callRealMethod();
+        }).when(faults).clear();
+
+        reset(CONFIRMED).andExpect(status().isOk());
+
+        assertThat(rowsWhenCleared[0]).isZero();
     }
 }
