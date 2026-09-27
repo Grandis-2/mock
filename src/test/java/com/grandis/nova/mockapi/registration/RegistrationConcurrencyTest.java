@@ -1,9 +1,11 @@
 package com.grandis.nova.mockapi.registration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import com.grandis.nova.mockapi.registration.dto.RegisterRequest;
 import java.time.Instant;
@@ -17,15 +19,20 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mysql.MySQLContainer;
@@ -35,8 +42,9 @@ import org.testcontainers.utility.MountableFile;
  * 같은 키 동시 요청을 <b>진짜 MySQL</b> 로 본다.
  *
  * <p>멱등 등록은 잠금 읽기와 중복 키(1062)에 기댄다. H2 는 둘 다 다르게 동작하므로 여기서 통과해야
- * 의미가 있다. 스키마는 {@code docs/schema.sql} 을 그대로 넣고({@code ddl-auto=validate} 로 엔티티와
- * 맞는지도 확인된다), 서버 격리 수준은 compose 와 같은 READ COMMITTED 다.
+ * 의미가 있다. 키 조회가 진행 중인 등록을 기다리는지도 잠금 동작이라 여기서 본다. 스키마는
+ * {@code docs/schema.sql} 을 그대로 넣고({@code ddl-auto=validate} 로 엔티티와 맞는지도 확인된다),
+ * 서버 격리 수준은 compose 와 같은 READ COMMITTED 다.
  *
  * <p>Docker 가 없으면 이 시험만 건너뛴다. 빌드는 막지 않는다.
  */
@@ -46,6 +54,7 @@ import org.testcontainers.utility.MountableFile;
         "spring.datasource.hikari.transaction-isolation=TRANSACTION_READ_COMMITTED",
         "spring.datasource.hikari.maximum-pool-size=20"
 })
+@AutoConfigureMockMvc
 class RegistrationConcurrencyTest {
 
     @Container
@@ -65,6 +74,9 @@ class RegistrationConcurrencyTest {
     private static final int ROUNDS = 100;
     private static final int CONCURRENT = 10;
 
+    /** 키 조회가 이만큼 돌아오지 않으면 등록을 기다리는 중으로 본다. 잠금 없는 조회는 몇 ms 면 끝난다. */
+    private static final long LOCK_WAIT_PROOF_MS = 500;
+
     /** MySQL 이 DATETIME(6) 을 글자로 내줄 때의 모양. */
     private static final DateTimeFormatter DB_DATETIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS").withZone(ZoneOffset.UTC);
@@ -77,6 +89,15 @@ class RegistrationConcurrencyTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private RegistrationWriter writer;
+
+    @Autowired
+    private TransactionTemplate tx;
+
+    @Autowired
+    private MockMvc mvc;
 
     @MockitoSpyBean
     private ExternalNumberGenerator numbers;
@@ -179,5 +200,92 @@ class RegistrationConcurrencyTest {
                 UUID.randomUUID().toString()))
                 .isInstanceOf(DataAccessException.class)
                 .satisfies(e -> assertThat(DuplicateKey.isCause(e)).isFalse());
+    }
+
+    /**
+     * 키 조회의 존재 이유. 워커는 응답이 유실되면 이 조회의 404 를 "등록 안 됨" 으로 믿고 재등록한다.
+     * 그냥 읽으면 커밋 안 된 등록을 못 본 채 바로 404 가 나가 중복 등록이 된다.
+     */
+    @Test
+    @DisplayName("키 조회는 커밋 전 등록을 기다렸다가 찾는다 - 그 사이 404 를 주지 않는다")
+    void byKeyWaitsForUncommittedRegistration() throws Exception {
+        String key = UUID.randomUUID().toString();
+
+        MockHttpServletResponse response = lookupWhileRegistrationOpen(key, true);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getContentAsString())
+                .contains(repository.findById(key).orElseThrow().externalNumber());
+    }
+
+    /** 기다린 끝의 404 여야 확정 근거다. 롤백된 등록은 없던 일이니 기다린 뒤 404 가 맞다. */
+    @Test
+    @DisplayName("기다리던 등록이 롤백되면 키 조회는 그 뒤에 404 다")
+    void byKeyReturns404AfterRollback() throws Exception {
+        String key = UUID.randomUUID().toString();
+
+        MockHttpServletResponse response = lookupWhileRegistrationOpen(key, false);
+
+        assertThat(response.getStatus()).isEqualTo(404);
+        assertThat(repository.findById(key)).isEmpty();
+    }
+
+    /**
+     * 등록 트랜잭션을 INSERT 직후에 붙잡아 둔 채 키 조회를 보낸다. 조회가 등록이 끝나기 전에 돌아오면
+     * 실패다. 그 뒤 등록을 커밋(또는 롤백)하고 조회 응답을 돌려준다.
+     */
+    private MockHttpServletResponse lookupWhileRegistrationOpen(String key, boolean commit) throws Exception {
+        var inserted = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<?> registration = pool.submit(() -> tx.executeWithoutResult(status -> {
+                    writer.attemptOnce(key, REQUEST);   // 등록과 같은 경로로 INSERT 까지 간다
+                    inserted.countDown();
+                    awaitQuietly(release);
+                    if (!commit) {
+                        status.setRollbackOnly();
+                    }
+                }));
+                assertThat(inserted.await(10, TimeUnit.SECONDS)).isTrue();
+
+                Future<MockHttpServletResponse> lookup = pool.submit(() ->
+                        mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
+                                .andReturn().getResponse());
+
+                // 잠금 없이 읽으면 여기서 곧바로 404 가 돌아와 있다
+                assertThatExceptionOfType(TimeoutException.class)
+                        .as("등록이 끝나기 전에 키 조회가 돌아왔다 - 잠금 읽기가 아니다")
+                        .isThrownBy(() -> lookup.get(LOCK_WAIT_PROOF_MS, TimeUnit.MILLISECONDS));
+
+                release.countDown();
+                registration.get(10, TimeUnit.SECONDS);
+                return lookup.get(10, TimeUnit.SECONDS);
+            } finally {
+                // 단언이 실패해도 등록 스레드를 풀어야 풀이 닫힌다
+                release.countDown();
+            }
+        }
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 키 칸이 utf8mb4_bin 이다. 콜레이션이 대소문자를 무시하면 남의 등록을 내 것으로 알려준다. */
+    @Test
+    @DisplayName("키 조회는 대소문자를 구별한다")
+    void byKeyIsCaseSensitive() throws Exception {
+        String key = "Key-" + UUID.randomUUID();
+        service.register(key, REQUEST);
+
+        assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key.toUpperCase()))
+                .andReturn().getResponse().getStatus()).isEqualTo(404);
+        assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
+                .andReturn().getResponse().getStatus()).isEqualTo(200);
     }
 }
