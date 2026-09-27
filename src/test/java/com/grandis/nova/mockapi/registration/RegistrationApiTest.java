@@ -20,7 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
-import com.grandis.nova.mockapi.global.chaos.FaultHook;
+import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import java.time.Instant;
@@ -84,9 +84,14 @@ class RegistrationApiTest {
     @MockitoSpyBean
     private FailureInjector failureInjector;
 
-    /** 결함이 걸렸는지는 시험이 정한다. 발동했을 때 7단계가 제대로 이어지는지 본다. */
+    /**
+     * 결함이 걸렸는지는 시험이 정한다. 발동했을 때 7단계가 제대로 이어지는지 본다.
+     *
+     * <p>{@code FaultHook} 이 아니라 구현 클래스로 받는다. 인터페이스로 받으면 그 빈이 인터페이스만
+     * 아는 목으로 교체되어, 같은 빈을 구현 클래스로 주입받는 결함 주입 API 가 뜨지 못한다.
+     */
     @MockitoBean
-    private FaultHook faultHook;
+    private InMemoryFaultStore faultHook;
 
     /** 설정·결함을 바꾼 시험은 스스로 되돌린다(팀 규칙). */
     @AfterEach
