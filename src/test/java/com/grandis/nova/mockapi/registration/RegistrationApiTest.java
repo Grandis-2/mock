@@ -308,10 +308,10 @@ class RegistrationApiTest {
         register(key, BODY)
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"))
-                .andExpect(jsonPath("$.errorMessage").value(RegistrationService.RETRY_EXHAUSTED));
+                .andExpect(jsonPath("$.errorMessage").value(DuplicateKeyRetry.RETRY_EXHAUSTED));
 
         // 첫 키 1번 + 둘째 키 상한만큼
-        verify(numbers, times(1 + RegistrationService.MAX_ATTEMPTS)).next(any());
+        verify(numbers, times(1 + DuplicateKeyRetry.MAX_ATTEMPTS)).next(any());
         assertThat(repository.findById(key)).isEmpty();
     }
 
