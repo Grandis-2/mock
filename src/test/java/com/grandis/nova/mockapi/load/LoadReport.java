@@ -305,7 +305,7 @@ public final class LoadReport {
                 .append("건 | — | — | 위 대조 참고 |\n");
         out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | ")
                 .append(expectedInFlight(plan, registerLatencyMs))
-                .append(" | 커넥션 대기가 쌓이면 이론값을 크게 넘는다 |\n");
+                .append(" | 넘으면 어딘가에서 대기가 쌓였다 |\n");
         out.append("| 전체 소요 | ").append(elapsed.toMillis()).append("ms | — | — | — |\n\n");
 
         out.append("> 백분위는 응답을 받은 요청만으로 계산했다. 응답이 없는 요청에는 응답 지연이 없다.\n");
@@ -324,11 +324,13 @@ public final class LoadReport {
      * 지켰다는 것</b>이다.
      */
     /**
-     * 동시에 떠 있을 요청 수의 이론값. {@code RPS × 한 건이 걸리는 시간} 이다.
+     * 동시에 떠 있을 요청 수의 상한. {@code RPS × (설정 지연 + 허용 오버헤드)} 다.
      *
-     * <p>관측치가 이것을 크게 넘으면 요청이 어딘가에서 기다리며 쌓였다는 뜻이다. 2026-09-28
-     * 판정에서 커넥션 풀 20 일 때 baseline 관측 480(이론 ~300), latency 1,342(이론 ~1,035)
-     * 였고, 풀을 30 으로 올리자 303 · 1,057 로 이론값에 붙었다.
+     * <p>관측치가 이것을 넘으면 요청이 어딘가에서 기다리며 쌓였다는 뜻이다. 2026-09-28 판정에서
+     * 커넥션 풀 20 일 때 baseline 관측 480(상한 ~375), latency 1,342(상한 ~1,125) 였고, 풀을 30 으로
+     * 올리자 303 · 1,057 로 상한 안에 들어왔다.
+     *
+     * <p>다만 넘었다고 원인이 Mock 이라는 뜻은 아니다. PC 가 멈칫해도 넘는다. 그 구분은 발사 지연이 한다.
      */
     private static String expectedInFlight(LoadPlan plan, int registerLatencyMs) {
         if (plan.rampUp().isZero()) {
@@ -336,7 +338,7 @@ public final class LoadReport {
         }
         double rps = (double) plan.totalRequests() / plan.rampUp().toSeconds();
         double perRequestSec = (registerLatencyMs + plan.maxP95Overhead().toMillis()) / 1000.0;
-        return "이론 ~" + Math.round(rps * perRequestSec);
+        return "상한 ~" + Math.round(rps * perRequestSec);
     }
 
     private void appendVerification(StringBuilder out, LoadPlan plan,
