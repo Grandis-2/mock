@@ -21,7 +21,11 @@ spring:
     hikari:
       # 빠뜨리면 오류가 나지 않는다. 부하가 걸릴 때까지 아무도 모른다.
       transaction-isolation: TRANSACTION_READ_COMMITTED
-      maximum-pool-size: 20
+      # 20 은 500 RPS 에서 병목이었다. 요청이 커넥션을 기다리며 쌓여 최대 동시가 이론값의
+      # 1.6배(baseline 관측 480 / 이론 ~300)까지 올라갔고 p95 오버헤드가 464ms 였다.
+      # 30 으로 올리자 303 · 오버헤드 70ms 로 이론값에 붙었고, 50 과 차이가 없었다.
+      # 통합 때 본 서비스와 MySQL 을 나눠 쓰는 것도 고려한 값이다. (2026-09-28 판정 실측)
+      maximum-pool-size: 30
 
   jpa:
     hibernate:
