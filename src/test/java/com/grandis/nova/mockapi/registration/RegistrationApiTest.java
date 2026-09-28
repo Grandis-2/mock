@@ -20,7 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
-import com.grandis.nova.mockapi.global.chaos.FaultHook;
+import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import java.time.Instant;
@@ -39,7 +39,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -70,9 +69,6 @@ class RegistrationApiTest {
     private RegistrationRepository repository;
 
     @Autowired
-    private TransactionTemplate tx;
-
-    @Autowired
     private MockConfigStore store;
 
     @Autowired
@@ -84,9 +80,14 @@ class RegistrationApiTest {
     @MockitoSpyBean
     private FailureInjector failureInjector;
 
-    /** 결함이 걸렸는지는 시험이 정한다. 발동했을 때 7단계가 제대로 이어지는지 본다. */
+    /**
+     * 결함이 걸렸는지는 시험이 정한다. 발동했을 때 7단계가 제대로 이어지는지 본다.
+     *
+     * <p>{@code FaultHook} 이 아니라 구현 클래스로 받는다. 인터페이스로 받으면 그 빈이 인터페이스만
+     * 아는 목으로 교체되어, 같은 빈을 구현 클래스로 주입받는 결함 주입 API 가 뜨지 못한다.
+     */
     @MockitoBean
-    private FaultHook faultHook;
+    private InMemoryFaultStore faultHook;
 
     /** 설정·결함을 바꾼 시험은 스스로 되돌린다(팀 규칙). */
     @AfterEach
@@ -197,9 +198,11 @@ class RegistrationApiTest {
     void registerCancelRegister() throws Exception {
         String key = newKey();
         String number = bodyOf(register(key, BODY)).get("externalNumber").asString();
-        // 취소 API 는 NV-23 이라 원장을 직접 취소한다
-        tx.executeWithoutResult(status ->
-                repository.findById(key).orElseThrow().cancel(Instant.now()));
+        mvc.perform(post("/external/cancellations")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"externalKey":"%s"}""".formatted(key)))
+                .andExpect(status().isOk());
 
         register(key, BODY)
                 .andExpect(status().isConflict())
@@ -308,10 +311,10 @@ class RegistrationApiTest {
         register(key, BODY)
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"))
-                .andExpect(jsonPath("$.errorMessage").value(RegistrationService.RETRY_EXHAUSTED));
+                .andExpect(jsonPath("$.errorMessage").value(DuplicateKeyRetry.RETRY_EXHAUSTED));
 
         // 첫 키 1번 + 둘째 키 상한만큼
-        verify(numbers, times(1 + RegistrationService.MAX_ATTEMPTS)).next(any());
+        verify(numbers, times(1 + DuplicateKeyRetry.MAX_ATTEMPTS)).next(any());
         assertThat(repository.findById(key)).isEmpty();
     }
 
