@@ -36,15 +36,20 @@ public final class LoadTestMain {
     private static final int AGREED_REQUESTS = 5_000;
 
     /**
-     * 등록 원장을 직접 읽는 곳. {@code application.yml.example} 과 같은 값이다.
+     * 등록 원장을 직접 읽는 곳의 기본값. {@code application.yml.example} 과 같다.
      *
      * <p>Mock 은 대조용 목록 API 를 두지 않으므로(요구사항 2.3 · 팀 결정) 스키마를 읽기 전용으로
-     * 조회한다. 포트를 바꿨으면 여기도 맞춘다.
+     * 조회한다.
+     *
+     * <p><b>부하를 쏘는 쪽과 Mock 이 다른 장비면 반드시 인자로 넘겨야 한다.</b> 합의 조건 1번이
+     * 장비 분리인데, 기본값의 {@code localhost} 는 부하를 쏘는 장비를 가리켜 원장이 비어 보이고
+     * 키 대조가 전부 실패로 찍힌다. {@code compose.yaml} 이 포트를 모든 인터페이스에 열어두므로
+     * Mock 장비의 주소만 넣으면 된다.
      */
-    private static final String JDBC_URL =
+    private static final String DEFAULT_JDBC_URL =
             "jdbc:mysql://localhost:3307/external_mock?serverTimezone=UTC";
-    private static final String DB_USER = "nova";
-    private static final String DB_PASSWORD = "nova";
+    private static final String DEFAULT_DB_USER = "nova";
+    private static final String DEFAULT_DB_PASSWORD = "nova";
 
     private static final HttpClient CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(3))
@@ -58,6 +63,9 @@ public final class LoadTestMain {
         String scenario = args.length > 1 ? args[1] : "baseline";
         String pass = args.length > 2 ? args[2] : "classify";
         int requests = args.length > 3 ? Integer.parseInt(args[3]) : AGREED_REQUESTS;
+        String jdbcUrl = args.length > 4 ? args[4] : DEFAULT_JDBC_URL;
+        String dbUser = args.length > 5 ? args[5] : DEFAULT_DB_USER;
+        String dbPassword = args.length > 6 ? args[6] : DEFAULT_DB_PASSWORD;
 
         applyScenario(baseUrl, scenario);
         String configBody = get(baseUrl + CONFIG);
@@ -79,8 +87,8 @@ public final class LoadTestMain {
         Duration elapsed = runner.run();
 
         // 클라이언트가 멈춰도 서버는 계속 처리한다. 잦아들기를 기다린 뒤 원장을 떠 온다.
-        System.out.println("등록 원장이 잦아들기를 기다린다...");
-        RegistrationSnapshot db = RegistrationSnapshot.take(JDBC_URL, DB_USER, DB_PASSWORD);
+        System.out.println("등록 원장이 잦아들기를 기다린다... (" + jdbcUrl + ")");
+        RegistrationSnapshot db = RegistrationSnapshot.take(jdbcUrl, dbUser, dbPassword);
 
         String report = runner.report()
                 .render(plan, configBody, configVersion, registerLatencyMs,
