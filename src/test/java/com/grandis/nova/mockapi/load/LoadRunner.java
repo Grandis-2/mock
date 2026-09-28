@@ -31,6 +31,9 @@ public final class LoadRunner {
     private static final String BODY = """
             {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
+    private static final java.util.regex.Pattern EXTERNAL_NUMBER =
+            java.util.regex.Pattern.compile("\"externalNumber\"\\s*:\\s*\"([^\"]+)\"");
+
     private final LoadPlan plan;
     private final HttpClient client;
     private final LoadReport report = new LoadReport();
@@ -101,7 +104,7 @@ public final class LoadRunner {
                 Thread.sleep(Duration.ofNanos(waitNanos));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                report.add(new LoadReport.Attempt(key, Outcome.NOT_SENT, 0, Duration.ZERO));
+                report.add(new LoadReport.Attempt(key, null, Outcome.NOT_SENT, 0, Duration.ZERO));
                 return;
             }
         }
@@ -119,22 +122,36 @@ public final class LoadRunner {
         trackEnter();
         Instant sentAt = Instant.now();
         try {
-            HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
+            // 본문을 버리지 않고 읽는다. 201 의 예약번호를 DB 에 적힌 번호와 맞춰 봐야 하기 때문이다.
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            Outcome outcome = Outcome.ofStatus(response.statusCode());
             report.add(new LoadReport.Attempt(
                     key,
-                    Outcome.ofStatus(response.statusCode()),
+                    outcome == Outcome.ACCEPTED ? externalNumberOf(response.body()) : null,
+                    outcome,
                     response.statusCode(),
                     Duration.between(sentAt, Instant.now())));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             report.add(new LoadReport.Attempt(
-                    key, Outcome.UNKNOWN, 0, Duration.between(sentAt, Instant.now())));
+                    key, null, Outcome.UNKNOWN, 0, Duration.between(sentAt, Instant.now())));
         } catch (Exception e) {
             report.add(new LoadReport.Attempt(
-                    key, Outcome.ofFailure(e), 0, Duration.between(sentAt, Instant.now())));
+                    key, null, Outcome.ofFailure(e), 0, Duration.between(sentAt, Instant.now())));
         } finally {
             inFlight.decrementAndGet();
         }
+    }
+
+    /**
+     * 201 응답에서 예약번호만 긁는다. {@code LoadTestMain} 의 {@code configVersion} 과 같은 방식이다 —
+     * 값 하나를 뽑는 데 JSON 의존성을 늘리지 않는다.
+     *
+     * <p>못 찾으면 null 이다. 등록 응답에는 반드시 있어야 하므로, null 이 남으면 그 자체가 결함이다.
+     */
+    private static String externalNumberOf(String body) {
+        var matcher = EXTERNAL_NUMBER.matcher(body);
+        return matcher.find() ? matcher.group(1) : null;
     }
 
     private void trackEnter() {
@@ -163,7 +180,7 @@ public final class LoadRunner {
                 // 관찰 종료 조건을 넘긴 요청. 버리지 않고 결과 불명으로 센다.
                 future.cancel(true);
                 report.add(new LoadReport.Attempt(
-                        keys[i], Outcome.UNKNOWN, 0, plan.responseTimeout()));
+                        keys[i], null, Outcome.UNKNOWN, 0, plan.responseTimeout()));
             }
         }
     }

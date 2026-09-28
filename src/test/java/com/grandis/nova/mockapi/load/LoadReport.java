@@ -24,9 +24,12 @@ public final class LoadReport {
     /**
      * 요청 하나의 결과. 응답을 못 받았으면 {@code status} 는 0 이다.
      *
-     * @param externalKey 이 요청이 보낸 멱등 키. 끝나고 DB 를 <b>키로</b> 맞추기 위한 것이다
+     * @param externalKey    이 요청이 보낸 멱등 키. 끝나고 DB 를 <b>키로</b> 맞추기 위한 것이다
+     * @param externalNumber 201 을 받았을 때 Mock 이 준 예약번호. 그 밖에는 null.
+     *                       DB 에 적힌 번호와 같은지 봐야 "행은 있는데 다른 번호" 를 잡을 수 있다
      */
-    public record Attempt(String externalKey, Outcome outcome, int status, Duration latency) {
+    public record Attempt(String externalKey, String externalNumber,
+                          Outcome outcome, int status, Duration latency) {
     }
 
     /**
