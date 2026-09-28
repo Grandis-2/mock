@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.load;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -105,13 +106,108 @@ public final class LoadReport {
     }
 
     /**
+     * 클라이언트가 본 결과와 DB 가 어긋난 한 건.
+     *
+     * @param reason 무엇이 어긋났는지. 보고서에 그대로 찍는다
+     */
+    public record Mismatch(String externalKey, Outcome outcome, int status, String reason) {
+    }
+
+    /**
+     * <b>합격의 본체.</b> 클라이언트가 본 결과를 DB 와 <b>키로</b> 맞춘다.
+     *
+     * <p>건수만 맞춰 보면 201 키 하나가 빠지고 5xx 키 하나가 들어가도 개수가 같아 최악의 버그를
+     * 놓친다. 요구사항 8장이 "건수 합계만 비교하지 않음" 으로 정한 이유다.
+     *
+     * <p>규칙은 모드와 무관하다. {@code failureMode} 가 HTTP_5XX 든 TIMEOUT 든, 주입한 실패는
+     * 전부 커밋 전이므로 5xx 키에는 행이 없어야 한다.
+     *
+     * <ul>
+     *   <li>201 — 행이 있고 <b>번호까지 같아야</b> 한다
+     *   <li>400 · 5xx · 미전송 — 행이 없어야 한다
+     *   <li>결과 불명 — 있든 없든 맞다. 커밋 뒤 응답만 유실됐을 수도, 커밋 전에 끊겼을 수도 있다
+     *   <li>409 · 422 — <b>나오면 그 자체가 결함이다.</b> 요청마다 새 키를 쓰므로 취소 표식도
+     *       기존 등록도 있을 수 없다
+     * </ul>
+     *
+     * <p>{@code 접수 성공 ≤ DB 행 ≤ 접수 성공 + 결과 불명} 은 이 규칙에서 저절로 따라온다.
+     * 그 부등식을 따로 걸지 않는 이유는, 등호가 성립하는 조건이 모드와 부하에 따라 달라져
+     * 계약을 지켰는데도 깨질 수 있기 때문이다.
+     */
+    public List<Mismatch> verifyAgainst(RegistrationSnapshot db) {
+        List<Mismatch> mismatches = new ArrayList<>();
+        for (Attempt a : all()) {
+            switch (a.outcome()) {
+                case ACCEPTED -> checkAccepted(a, db, mismatches);
+                case REJECTED -> checkRejected(a, db, mismatches);
+                case TRANSIENT_FAILURE, NOT_SENT -> checkAbsent(a, db, mismatches);
+                case UNKNOWN -> { /* 있든 없든 맞다 */ }
+            }
+        }
+        return mismatches;
+    }
+
+    private static void checkAccepted(Attempt a, RegistrationSnapshot db, List<Mismatch> out) {
+        if (!db.has(a.externalKey())) {
+            out.add(new Mismatch(a.externalKey(), a.outcome(), a.status(),
+                    "201 을 받았는데 행이 없다 — 커밋되지 않은 성공"));
+            return;
+        }
+        String stored = db.numberOf(a.externalKey());
+        if (a.externalNumber() == null) {
+            out.add(new Mismatch(a.externalKey(), a.outcome(), a.status(),
+                    "201 응답에 예약번호가 없다 (DB: " + stored + ")"));
+        } else if (!a.externalNumber().equals(stored)) {
+            out.add(new Mismatch(a.externalKey(), a.outcome(), a.status(),
+                    "번호가 다르다 — 응답 " + a.externalNumber() + " · DB " + stored));
+        }
+    }
+
+    /** 새 키에 409·422 가 나올 수 없다. 나왔다면 키가 겹쳤거나 Mock 이 남의 행을 보고 있다. */
+    private static void checkRejected(Attempt a, RegistrationSnapshot db, List<Mismatch> out) {
+        if (a.status() == 409 || a.status() == 422) {
+            out.add(new Mismatch(a.externalKey(), a.outcome(), a.status(),
+                    "새 키에 " + a.status() + " 가 나왔다 — 취소 표식도 기존 등록도 있을 수 없다"));
+            return;
+        }
+        checkAbsent(a, db, out);
+    }
+
+    private static void checkAbsent(Attempt a, RegistrationSnapshot db, List<Mismatch> out) {
+        if (db.has(a.externalKey())) {
+            out.add(new Mismatch(a.externalKey(), a.outcome(), a.status(),
+                    "행이 없어야 하는데 있다 (번호 " + db.numberOf(a.externalKey()) + ")"));
+        }
+    }
+
+    /**
+     * 결과 불명 중 실제로는 DB 에 남은 것. <b>이 프로젝트의 핵심 장면이다.</b>
+     *
+     * <p>클라이언트에게는 둘 다 "응답 없음" 으로 똑같은데, 남은 쪽은 재시도하면 중복 등록이 되고
+     * 안 남은 쪽은 재시도해야 한다. 그래서 워커가 {@code by-key} 로 먼저 확인해야 한다.
+     */
+    public long unknownWithRow(RegistrationSnapshot db) {
+        return all().stream()
+                .filter(a -> a.outcome() == Outcome.UNKNOWN)
+                .filter(a -> db.has(a.externalKey()))
+                .count();
+    }
+
+    /** 우리가 보낸 키가 아닌 행. 판정 전에 초기화했으면 0 이어야 한다. */
+    public int foreignRows(RegistrationSnapshot db) {
+        return db.rowCount() - (int) db.numbersByKey().keySet().stream()
+                .filter(attempts::containsKey)
+                .count();
+    }
+
+    /**
      * @param configVersion 이 실행에 적용된 Mock 설정 버전 (요구사항 5.4)
      * @param configBody    같은 목적. 지연·실패율을 그대로 남긴다
      * @param maxInFlight   동시에 떠 있던 요청의 최대치. 서버 쪽 커넥션 수의 대용값이다
      * @param elapsed       첫 발사부터 마지막 응답까지
      */
     public String render(LoadPlan plan, String configBody, int configVersion,
-                         int maxInFlight, Duration elapsed) {
+                         int maxInFlight, Duration elapsed, RegistrationSnapshot db) {
         Map<Outcome, Integer> counts = byOutcome();
         StringBuilder out = new StringBuilder();
 
@@ -156,6 +252,8 @@ public final class LoadReport {
         appendCount(out, "미전송", counts.get(Outcome.NOT_SENT), "미전송");
         out.append("| 합계 | ").append(total()).append(" | 100.0% | |\n\n");
 
+        appendVerification(out, plan, counts, db);
+
         out.append("## 거절 내역 (응답을 받은 것)\n\n");
         if (byStatus().isEmpty()) {
             out.append("응답을 받은 요청이 없다.\n\n");
@@ -182,6 +280,66 @@ public final class LoadReport {
         out.append("> 서버 쪽 실제 커넥션 수는 클라이언트에서 볼 수 없다. 위 값은 동시에 떠 있던\n");
         out.append("> 요청의 최대치이며, 톰캣 커넥션은 서버에서 따로 관찰해야 한다.\n");
         return out.toString();
+    }
+
+    /** 어긋난 키를 몇 건까지 예시로 찍을지. 건수만 적으면 어느 키인지 찾을 수 없다. */
+    private static final int MISMATCH_SAMPLES = 10;
+
+    /**
+     * 합격의 본체를 적는다. 지표(p95 · 에러율)보다 이쪽이 먼저다.
+     *
+     * <p>Mock 이 증명할 것은 빠르다는 게 아니라 <b>부하 중에도 "실패는 커밋 전" 이라는 약속을
+     * 지켰다는 것</b>이다.
+     */
+    private void appendVerification(StringBuilder out, LoadPlan plan,
+                                    Map<Outcome, Integer> counts, RegistrationSnapshot db) {
+        List<Mismatch> mismatches = verifyAgainst(db);
+        boolean sumMatches = total() == plan.totalRequests();
+        int foreign = foreignRows(db);
+        long unknownKept = unknownWithRow(db);
+
+        out.append("## DB 대조 (합격의 본체)\n\n");
+        out.append("클라이언트가 본 결과를 등록 원장과 **키로** 맞춘다. 건수만 비교하면 201 키 하나가\n")
+                .append("빠지고 5xx 키 하나가 들어가도 개수가 같다 (요구사항 8장 \"건수 합계만 비교하지 않음\").\n\n");
+
+        out.append("| 조건 | 값 | 판정 |\n| --- | --- | --- |\n");
+        out.append("| 분류 합 = 보낸 요청 수 | ").append(total()).append(" / ")
+                .append(plan.totalRequests()).append(" | ").append(verdict(sumMatches)).append(" |\n");
+        out.append("| 키 대조 위반 | ").append(mismatches.size()).append("건 | ")
+                .append(verdict(mismatches.isEmpty())).append(" |\n");
+        out.append("| 우리 키가 아닌 행 | ").append(foreign).append("건 | ")
+                .append(verdict(foreign == 0)).append(" |\n");
+        out.append("| 원장 총 행 수 | ").append(db.rowCount()).append("건 | — |\n");
+        out.append("| 집계 전 잦아듦 | ").append(db.quiesced() ? "확인" : "**멎지 않았다**")
+                .append(" (").append(db.waited().toSeconds()).append("초 대기) | ")
+                .append(verdict(db.quiesced())).append(" |\n\n");
+
+        out.append("### 결과 불명의 두 종류\n\n");
+        out.append("클라이언트에게는 둘 다 \"응답 없음\" 으로 똑같다. 그런데 한쪽은 등록됐고 한쪽은 안 됐다.\n")
+                .append("결과 불명일 때 워커가 할 수 있는 판단은 \"다시 보낸다\" 뿐이라, 남은 쪽이었다면 그\n")
+                .append("재시도가 **중복 등록**이 된다. `by-key` 조회가 왜 필수인지의 실측 근거다.\n\n");
+        int unknown = counts.get(Outcome.UNKNOWN);
+        out.append("| | 건수 |\n| --- | --- |\n");
+        out.append("| 결과 불명 · **DB 에 남음** (커밋 뒤 응답만 유실) | ").append(unknownKept).append(" |\n");
+        out.append("| 결과 불명 · DB 에 없음 (커밋 전에 끊김) | ").append(unknown - unknownKept).append(" |\n\n");
+
+        if (!mismatches.isEmpty()) {
+            out.append("### 위반 내역\n\n");
+            out.append("| 키 | 분류 | 상태 | 무엇이 어긋났나 |\n| --- | --- | --- | --- |\n");
+            mismatches.stream().limit(MISMATCH_SAMPLES).forEach(m ->
+                    out.append("| `").append(m.externalKey()).append("` | ").append(m.outcome())
+                            .append(" | ").append(m.status() == 0 ? "—" : m.status())
+                            .append(" | ").append(m.reason()).append(" |\n"));
+            if (mismatches.size() > MISMATCH_SAMPLES) {
+                out.append("\n위 ").append(MISMATCH_SAMPLES).append("건은 예시다. 전체 ")
+                        .append(mismatches.size()).append("건.\n");
+            }
+            out.append('\n');
+        }
+    }
+
+    private static String verdict(boolean ok) {
+        return ok ? "통과" : "**실패**";
     }
 
     private void appendCount(StringBuilder out, String label, int count, String chapter8) {

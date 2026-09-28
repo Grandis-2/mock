@@ -32,6 +32,17 @@ public final class LoadTestMain {
     private static final String DEFAULT_BASE_URL = "http://localhost:8081";
     private static final String CONFIG = "/external/config";
 
+    /**
+     * 등록 원장을 직접 읽는 곳. {@code application.yml.example} 과 같은 값이다.
+     *
+     * <p>Mock 은 대조용 목록 API 를 두지 않으므로(요구사항 2.3 · 팀 결정) 스키마를 읽기 전용으로
+     * 조회한다. 포트를 바꿨으면 여기도 맞춘다.
+     */
+    private static final String JDBC_URL =
+            "jdbc:mysql://localhost:3307/external_mock?serverTimezone=UTC";
+    private static final String DB_USER = "nova";
+    private static final String DB_PASSWORD = "nova";
+
     private static final HttpClient CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(3))
             .build();
@@ -55,8 +66,12 @@ public final class LoadTestMain {
         LoadRunner runner = new LoadRunner(plan);
         Duration elapsed = runner.run();
 
+        // 클라이언트가 멈춰도 서버는 계속 처리한다. 잦아들기를 기다린 뒤 원장을 떠 온다.
+        System.out.println("등록 원장이 잦아들기를 기다린다...");
+        RegistrationSnapshot db = RegistrationSnapshot.take(JDBC_URL, DB_USER, DB_PASSWORD);
+
         String report = runner.report()
-                .render(plan, configBody, configVersion, runner.maxInFlight(), elapsed);
+                .render(plan, configBody, configVersion, runner.maxInFlight(), elapsed, db);
         System.out.println();
         System.out.println(report);
 
