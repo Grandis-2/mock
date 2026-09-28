@@ -50,9 +50,14 @@ tasks.named('test') {
 // 달라서 빌드 성패의 기준이 될 수 없다. `test` 에 섞이면 매 빌드가 그만큼 느려진다.
 //
 //   ./gradlew bootRun                                  (다른 터미널에서 Mock 을 먼저 띄운다)
-//   ./gradlew loadTest --args="http://localhost:8081 baseline"
+//   ./gradlew loadTest --args="http://localhost:8081 baseline classify"
 //
-// 시나리오는 baseline · latency · timeout 세 가지다.
+// 인자는 <주소> <시나리오> <패스> [건수] 다.
+//   시나리오  baseline · latency · timeout
+//   패스      classify (분류 판정 · 응답 타임아웃 3초) · latency (지연 판정 · 10초)
+//   건수      생략하면 합의값 5,000. 배선만 확인할 때 작게 넣는다
+//
+// 판정 순서: 예열 1회(버림) → POST /external/reset → classify 3종 → latency 2종.
 tasks.register('loadTest', JavaExec) {
     group = 'verification'
     description = '부하 시험을 돌린다. Mock 이 이미 떠 있어야 한다'

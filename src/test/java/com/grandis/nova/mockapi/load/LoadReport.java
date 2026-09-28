@@ -207,13 +207,21 @@ public final class LoadReport {
      * @param elapsed       첫 발사부터 마지막 응답까지
      */
     public String render(LoadPlan plan, String configBody, int configVersion,
-                         int maxInFlight, Duration elapsed, RegistrationSnapshot db) {
+                         int registerLatencyMs, int maxInFlight, Duration elapsed,
+                         RegistrationSnapshot db) {
         Map<Outcome, Integer> counts = byOutcome();
         StringBuilder out = new StringBuilder();
 
         out.append("# 부하 시험 결과\n\n");
-        out.append("> 이 실행의 조건은 아직 팀 합의를 거치지 않았다. 요구사항 8장에 따라\n")
-                .append("> **성능 합격 판정의 근거로 쓸 수 없다.** 구조 확인용 실행이다.\n\n");
+        out.append("> 조건은 2026-09-28 합의됐다. **이 실행이 판정하는 것은 ")
+                .append(plan.pass() == LoadPlan.Pass.CLASSIFY ? "분류" : "응답 지연")
+                .append("이다.**\n");
+        out.append("> 응답 타임아웃 ").append(plan.responseTimeout().toSeconds())
+                .append("초는 ")
+                .append(plan.pass() == LoadPlan.Pass.CLASSIFY
+                        ? "워커 읽기 타임아웃 가정값이다(명세 기재값. 실제 값을 받으면 다시 돌린다)."
+                        : "백분위가 잘리지 않게 넉넉히 둔 값이다. 분류는 참고로만 본다.")
+                .append("\n\n");
 
         out.append("## 실행 환경\n\n");
         out.append("| 항목 | 값 |\n| --- | --- |\n");
@@ -229,15 +237,21 @@ public final class LoadReport {
         out.append("| configVersion | ").append(configVersion).append(" |\n");
         out.append("| 설정 전문 | `").append(configBody).append("` |\n\n");
 
-        out.append("## 조건\n\n");
-        out.append("| 항목 | 값 | 합의 |\n| --- | --- | --- |\n");
-        out.append("| 요청 규모 | ").append(plan.totalRequests()).append("건 | 미합의 |\n");
-        out.append("| 발생 구간 | ").append(plan.rampUp()).append(" | 미합의 |\n");
-        out.append("| 응답 타임아웃 | ").append(plan.responseTimeout()).append(" | 미합의 |\n");
-        out.append("| 관찰 종료 조건 | 발사 후 ").append(plan.drainTimeout()).append(" | 미합의 |\n");
-        out.append("| 허용 실패율 | ").append(plan.maxFailureRate()).append(" | 미합의 |\n");
-        out.append("| p95 / p99 기준 | ").append(plan.p95Target()).append(" / ")
-                .append(plan.p99Target()).append(" | 미합의 |\n\n");
+        out.append("## 조건 (2026-09-28 합의)\n\n");
+        out.append("| 항목 | 값 | 비고 |\n| --- | --- | --- |\n");
+        out.append("| 판정 대상 | ").append(plan.pass()).append(" | 두 패스로 나눠 돌린다 |\n");
+        out.append("| 요청 규모 | ").append(plan.totalRequests()).append("건 | 과제 예시 |\n");
+        out.append("| 발생 구간 | ").append(plan.rampUp()).append(" | 균등 발사 |\n");
+        out.append("| 응답 타임아웃 | ").append(plan.responseTimeout()).append(" | ")
+                .append(plan.pass() == LoadPlan.Pass.CLASSIFY ? "워커 가정값" : "잘린 분포 방지")
+                .append(" |\n");
+        out.append("| 관찰 종료 조건 | 발사 후 ").append(plan.drainTimeout())
+                .append(" | 응답 타임아웃보다 길어야 한다 (코드가 강제) |\n");
+        out.append("| 결과 불명 허용 | ").append(percent(plan.maxUnknownRate()))
+                .append(" | HTTP_5XX 모드. **잠정** — 장비 분리 후 확정 |\n");
+        out.append("| 오버헤드 기준 | max(").append(plan.p95OverheadFloor().toMillis())
+                .append("ms, 설정 지연 × ").append(plan.overheadRatio())
+                .append(") | p95. **잠정** — 패스 B 실측 후 확정 |\n\n");
 
         out.append("## 요청 분류 (요구사항 8장)\n\n");
         out.append("합계가 보낸 요청 수와 같아야 한다. 실패와 미전송을 결과에서 빼지 않는다.\n\n");
@@ -265,16 +279,19 @@ public final class LoadReport {
         }
 
         out.append("## 지표\n\n");
-        out.append("| 지표 | 값 | 기준 | 판정 |\n| --- | --- | --- | --- |\n");
-        appendMetric(out, "p95", percentile(95), plan.p95Target(), responded());
-        appendMetric(out, "p99", percentile(99), plan.p99Target(), responded());
-        out.append("| 에러율 | ").append(percent(failureRate())).append(" | ")
-                .append(percent(plan.maxFailureRate())).append(" | ")
-                .append(failureRate() <= plan.maxFailureRate() ? "이내" : "초과").append(" |\n");
+        out.append("설정 지연 ").append(registerLatencyMs).append("ms 를 뺀 **오버헤드**로 본다. ")
+                .append("절대 백분위로 두면 설정 500ms 에 1.5초도 통과한다.\n\n");
+        out.append("| 지표 | 관측 | 오버헤드 | 기준 | 판정 |\n| --- | --- | --- | --- | --- |\n");
+        appendOverhead(out, "p95", percentile(95), registerLatencyMs,
+                plan.p95OverheadTarget(registerLatencyMs), responded());
+        appendOverhead(out, "p99", percentile(99), registerLatencyMs,
+                plan.p99OverheadTarget(registerLatencyMs), responded());
+        out.append("| 에러율(접수 성공 제외) | ").append(percent(failureRate()))
+                .append(" | — | — | 참고 |\n");
         out.append("| **미완료(결과 불명)** | ").append(counts.get(Outcome.UNKNOWN))
-                .append("건 | — | — |\n");
-        out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | — |\n");
-        out.append("| 전체 소요 | ").append(elapsed.toMillis()).append("ms | — | — |\n\n");
+                .append("건 | — | — | 위 대조 참고 |\n");
+        out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | — | — |\n");
+        out.append("| 전체 소요 | ").append(elapsed.toMillis()).append("ms | — | — | — |\n\n");
 
         out.append("> 백분위는 응답을 받은 요청만으로 계산했다. 응답이 없는 요청에는 응답 지연이 없다.\n");
         out.append("> 서버 쪽 실제 커넥션 수는 클라이언트에서 볼 수 없다. 위 값은 동시에 떠 있던\n");
@@ -354,15 +371,17 @@ public final class LoadReport {
      * <p>0ms 를 기준과 비교하면 "이내" 가 되어, 전부 타임아웃난 최악의 실행이 지연 기준을 통과한
      * 것처럼 보인다. 요구사항 8장이 실패를 결과에서 빼지 말라고 한 것과 정확히 반대되는 왜곡이다.
      */
-    private static void appendMetric(StringBuilder out, String name, Duration actual,
-                                     Duration target, long responded) {
+    private static void appendOverhead(StringBuilder out, String name, Duration observed,
+                                       int registerLatencyMs, Duration target, long responded) {
         out.append("| ").append(name).append(" | ");
         if (responded == 0) {
-            out.append("측정 불가 | ").append(target.toMillis()).append("ms | 응답 0건 |\n");
+            out.append("측정 불가 | — | ").append(target.toMillis()).append("ms | 응답 0건 |\n");
             return;
         }
-        out.append(actual.toMillis()).append("ms | ").append(target.toMillis()).append("ms | ")
-                .append(actual.compareTo(target) <= 0 ? "이내" : "초과").append(" |\n");
+        long overhead = observed.toMillis() - registerLatencyMs;
+        out.append(observed.toMillis()).append("ms | ").append(overhead).append("ms | ")
+                .append(target.toMillis()).append("ms | ")
+                .append(overhead <= target.toMillis() ? "이내" : "초과").append(" |\n");
     }
 
     private static String percent(double ratio) {

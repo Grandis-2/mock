@@ -32,6 +32,9 @@ public final class LoadTestMain {
     private static final String DEFAULT_BASE_URL = "http://localhost:8081";
     private static final String CONFIG = "/external/config";
 
+    /** 합의된 요청 규모. 과제 예시 그대로다. 적은 수로 배선만 확인할 때는 네 번째 인자로 넘긴다. */
+    private static final int AGREED_REQUESTS = 5_000;
+
     /**
      * 등록 원장을 직접 읽는 곳. {@code application.yml.example} 과 같은 값이다.
      *
@@ -53,14 +56,23 @@ public final class LoadTestMain {
     public static void main(String[] args) throws Exception {
         String baseUrl = args.length > 0 ? args[0] : DEFAULT_BASE_URL;
         String scenario = args.length > 1 ? args[1] : "baseline";
+        String pass = args.length > 2 ? args[2] : "classify";
+        int requests = args.length > 3 ? Integer.parseInt(args[3]) : AGREED_REQUESTS;
 
         applyScenario(baseUrl, scenario);
         String configBody = get(baseUrl + CONFIG);
         int configVersion = readConfigVersion(configBody);
+        int registerLatencyMs = readNumber(configBody, "registerLatencyMs");
 
-        LoadPlan plan = LoadPlan.draft(baseUrl);
-        System.out.printf("시나리오 %s · %d건 / %s · configVersion %d%n",
-                scenario, plan.totalRequests(), plan.rampUp(), configVersion);
+        LoadPlan plan = switch (pass) {
+            case "classify" -> LoadPlan.classify(baseUrl, requests);
+            case "latency" -> LoadPlan.latency(baseUrl, requests);
+            default -> throw new IllegalArgumentException(
+                    "패스는 classify 또는 latency 여야 합니다. 받은 값: " + pass);
+        };
+        System.out.printf("시나리오 %s · 패스 %s · %d건 / %s · 타임아웃 %s · configVersion %d%n",
+                scenario, plan.pass(), plan.totalRequests(), plan.rampUp(),
+                plan.responseTimeout(), configVersion);
         System.out.println("설정: " + configBody);
 
         LoadRunner runner = new LoadRunner(plan);
@@ -71,7 +83,8 @@ public final class LoadTestMain {
         RegistrationSnapshot db = RegistrationSnapshot.take(JDBC_URL, DB_USER, DB_PASSWORD);
 
         String report = runner.report()
-                .render(plan, configBody, configVersion, runner.maxInFlight(), elapsed, db);
+                .render(plan, configBody, configVersion, registerLatencyMs,
+                        runner.maxInFlight(), elapsed, db);
         System.out.println();
         System.out.println(report);
 
@@ -121,9 +134,13 @@ public final class LoadTestMain {
         return CLIENT.send(request, HttpResponse.BodyHandlers.ofString()).body();
     }
 
-    /** 의존성을 늘리지 않으려고 숫자 하나만 긁는다. 보고서에는 설정 전문도 함께 남는다. */
     private static int readConfigVersion(String configBody) {
-        var matcher = java.util.regex.Pattern.compile("\"configVersion\"\\s*:\\s*(\\d+)")
+        return readNumber(configBody, "configVersion");
+    }
+
+    /** 의존성을 늘리지 않으려고 숫자 하나만 긁는다. 보고서에는 설정 전문도 함께 남는다. */
+    private static int readNumber(String configBody, String field) {
+        var matcher = java.util.regex.Pattern.compile("\"" + field + "\"\\s*:\\s*(\\d+)")
                 .matcher(configBody);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : -1;
     }
