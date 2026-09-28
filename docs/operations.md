@@ -165,14 +165,41 @@ curl -X POST localhost:8081/external/reset -H 'Content-Type: application/json' \
 ## 3. 부하 실행
 
 ```bash
-./gradlew bootRun                                          # 터미널 1
-./gradlew loadTest --args="http://localhost:8081 baseline" # 터미널 2
+./gradlew bootRun                                                     # 터미널 1
+./gradlew loadTest --args="http://localhost:8081 baseline classify"   # 터미널 2
 ```
 
-시나리오는 `baseline` · `latency` · `timeout` 세 가지다. 보고서는 `build/load/` 에 남는다.
+인자는 `<주소> <시나리오> <패스> [건수] [JDBC] [계정] [비밀번호]` 다.
 
-조건(요청 규모 · 발생 구간 · 응답 타임아웃 · 관찰 종료 조건 · 허용 실패율 · 지연 기준)은
-`LoadPlan.draft()` 한 곳에 모여 있다. **아직 팀 합의 전이라 보고서에 "미합의" 로 표시된다.**
+| | 값 |
+| --- | --- |
+| 시나리오 | `baseline` · `latency` · `timeout` |
+| 패스 | `classify`(분류 판정 · 타임아웃 3초) · `latency`(지연 판정 · 10초) |
+| 건수 | 생략하면 합의값 5,000 |
+| JDBC | 생략하면 `localhost:3307`. **부하를 쏘는 장비가 Mock 과 다르면 반드시 넣는다** |
+
+**순서를 지켜야 한다.**
+
+```
+예열 5,000건 (버린다)
+  → POST /external/reset
+  → classify: baseline · latency · timeout
+  → latency:  baseline · latency
+     (판정 실행마다 그 전에 reset)
+```
+
+매번 초기화하는 이유는 앞 실행의 행이 남으면 **"우리 키가 아닌 행" 으로 잡혀 판정이 실패**하기
+때문이다. 예열이 필요한 이유는 식은 JVM 과 데워진 JVM 의 성공률이 7.9% 와 98.8% 로 갈렸기 때문이다.
+
+보고서는 `build/load/` 에 남고, 클라이언트가 본 결과를 **등록 원장과 키로 대조한 판정**이 함께
+찍힌다. 조건은 2026-09-28 합의됐다.
+
+**돌리고 나서 서버 로그도 본다.** 둘 다 0건이어야 한다.
+
+```
+처리하지 못한 오류          (GlobalExceptionHandler)
+중복 키 재시도 상한 초과     (DuplicateKeyRetry)
+```
 
 방법과 결과 해석은 [load-test.md](load-test.md) 를 본다.
 
@@ -187,7 +214,18 @@ docker exec nova-mock-mysql mysql -unova -pnova -N \
 ```
 
 부하 시험에서는 **클라이언트가 받은 응답과 DB 실제 등록 건수를 반드시 함께 본다.** 둘이 다른 것이
-이 프로젝트가 다루는 문제 자체다 — 실측에서 응답 396건인데 DB 에는 5,000건이 있었다.
+이 프로젝트가 다루는 문제 자체다. 실측에서 이렇게 갈렸다.
+
+| 시나리오 | 결과 불명 | DB 에 남음 |
+| --- | --- | --- |
+| `latency` | 4,548건 | **4,544건** — 커밋은 끝났고 응답만 늦었다 |
+| `timeout` | 4,621건 | **0건** — 커밋 전에 끊겼다 |
+
+클라이언트 눈에는 둘이 똑같은 "응답 없음" 이다. 남은 쪽을 재시도하면 중복 등록이 되고, 안 남은
+쪽은 재시도해야 한다. `by-key` 조회가 왜 필요한지가 이 표다.
+
+> **집계는 서버가 잦아든 뒤에 한다.** 클라이언트가 멈춰도 서버는 계속 커밋한다. 행 수가 8초쯤
+> 변하지 않을 때까지 기다린 뒤 센다. 부하 하네스는 이걸 스스로 하고 보고서에 대기 시간을 적는다.
 
 ---
 
