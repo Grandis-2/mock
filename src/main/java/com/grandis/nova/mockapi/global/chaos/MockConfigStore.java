@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.global.chaos;
 
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.stereotype.Component;
 
@@ -32,7 +33,7 @@ public class MockConfigStore implements ConfigProvider {
                         properties.failureRate(),
                         properties.failureMode(),
                         0),
-                Instant.now()));
+                now()));
     }
 
     /**
@@ -64,6 +65,14 @@ public class MockConfigStore implements ConfigProvider {
                         failureRate,
                         failureMode,
                         old.snapshot().configVersion() + 1),
-                Instant.now()));
+                now()));
+    }
+
+    /**
+     * 밀리초까지만 남긴다. 다른 시각 칸(등록·취소·결함)이 모두 밀리초로 잘려 있어
+     * 여기만 나노초면 같은 실행의 기록을 나란히 놓고 볼 때 정밀도가 어긋난다.
+     */
+    private static Instant now() {
+        return Instant.now().truncatedTo(ChronoUnit.MILLIS);
     }
 }
