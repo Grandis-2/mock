@@ -224,6 +224,7 @@ public final class LoadReport {
             out.append("> **아래 계약 판정(키 대조 · 분류 합)은 그대로 본다.** 부하가 덜 걸렸다고 계약이\n")
                     .append("> 깨져도 되는 것은 아니다.\n\n");
         }
+        appendNotSentWarning(out, counts.get(Outcome.NOT_SENT));
         out.append("> 조건은 2026-09-28 합의됐다. **이 실행이 판정하는 것은 ")
                 .append(plan.pass() == LoadPlan.Pass.CLASSIFY ? "분류" : "응답 지연")
                 .append("이다.**\n");
@@ -323,6 +324,27 @@ public final class LoadReport {
      * <p>Mock 이 증명할 것은 빠르다는 게 아니라 <b>부하 중에도 "실패는 커밋 전" 이라는 약속을
      * 지켰다는 것</b>이다.
      */
+    /**
+     * 미전송이 있으면 <b>부하가 서버에 다 도달하지 못한 것</b>이라 경고한다. 판정에서 빼지는 않는다.
+     *
+     * <p>발사 지연만으로는 이 경우를 못 잡는다. 가상 스레드가 제시간에 깨어나 요청을 내보내는 것은
+     * 싸서, 메모리가 모자라도 발사는 늦지 않는다. 막히는 곳은 그 다음 — 연결을 맺는 단계다.
+     * 2026-09-28 RAM 5.85GB PC 에서 발사 지연은 한계 이내인데 미전송이 36.7% 나온 적이 있다.
+     *
+     * <p>자동으로 빼지 않는 이유 — 원인이 <b>Mock 이 연결을 못 받은 것</b>이면 그건 Mock 의 실패인데,
+     * 빼면 숨기게 된다. 클라이언트 쪽 원인인지 Mock 쪽 원인인지를 적은 뒤에야 판정에 쓸 수 있다.
+     */
+    private void appendNotSentWarning(StringBuilder out, int notSent) {
+        if (notSent == 0) {
+            return;
+        }
+        out.append("> ## ⚠ 미전송 ").append(notSent).append("건 — 부하가 서버에 다 도달하지 못했다\n>\n");
+        out.append("> 연결조차 맺지 못한 요청이다. 목표 부하가 서버에 온전히 걸리지 않았으므로 **원인을\n")
+                .append("> 가리기 전에는 성능 판정에 쓰지 않는다.** 클라이언트 쪽(메모리 · 소켓)이면 측정 환경\n")
+                .append("> 문제이고, Mock 이 연결을 못 받은 것이면 Mock 의 실패다. 발사 지연은 이 경우를 잡지\n")
+                .append("> 못한다 — 발사는 제시간에 되고 연결 단계에서 막히기 때문이다.\n\n");
+    }
+
     /**
      * 동시에 떠 있을 요청 수의 상한. {@code RPS × (설정 지연 + 허용 오버헤드)} 다.
      *
