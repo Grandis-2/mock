@@ -1,9 +1,10 @@
 package com.grandis.nova.mockapi.load;
 
 import java.time.Duration;
-import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -20,18 +21,37 @@ import java.util.TreeMap;
  */
 public final class LoadReport {
 
-    /** 요청 하나의 결과. 응답을 못 받았으면 {@code status} 는 0 이다. */
-    public record Attempt(Outcome outcome, int status, Duration latency) {
+    /**
+     * 요청 하나의 결과. 응답을 못 받았으면 {@code status} 는 0 이다.
+     *
+     * @param externalKey 이 요청이 보낸 멱등 키. 끝나고 DB 를 <b>키로</b> 맞추기 위한 것이다
+     */
+    public record Attempt(String externalKey, Outcome outcome, int status, Duration latency) {
     }
 
-    private final List<Attempt> attempts = new ArrayList<>();
+    /**
+     * 키로 모은다. 같은 요청의 결과가 두 번 들어오면 <b>먼저 것만 남는다.</b>
+     *
+     * <p>관찰 종료를 넘긴 요청은 바깥에서 결과 불명으로 적히고, 그때 걸린 인터럽트 때문에 보내던
+     * 스레드도 한 번 더 적는다. 리스트에 쌓으면 한 요청이 두 번 세어져 <b>분류 합이 보낸 요청 수를
+     * 넘는다.</b> 그 합이 합격 조건이므로 여기서 막는다.
+     *
+     * <p>먼저 것을 남기는 게 맞다. 실제 결과를 받은 쪽이 먼저 적고, 바깥은 아직 안 끝난 요청만
+     * 적기 때문이다.
+     */
+    private final Map<String, Attempt> attempts = new LinkedHashMap<>();
 
     public synchronized void add(Attempt attempt) {
-        attempts.add(attempt);
+        attempts.putIfAbsent(attempt.externalKey(), attempt);
     }
 
+    /** 결과가 기록된 요청 수. 보낸 요청 수와 같아야 한다. */
     public int total() {
         return attempts.size();
+    }
+
+    private Collection<Attempt> all() {
+        return attempts.values();
     }
 
     public Map<Outcome, Integer> byOutcome() {
@@ -39,14 +59,14 @@ public final class LoadReport {
         for (Outcome outcome : Outcome.values()) {
             counts.put(outcome, 0);
         }
-        attempts.forEach(a -> counts.merge(a.outcome(), 1, Integer::sum));
+        all().forEach(a -> counts.merge(a.outcome(), 1, Integer::sum));
         return counts;
     }
 
     /** 응답을 받은 것만 상태 코드별로. 거절의 내역을 나눠 보기 위한 것이다. */
     public Map<Integer, Integer> byStatus() {
         Map<Integer, Integer> counts = new TreeMap<>();
-        attempts.stream()
+        all().stream()
                 .filter(a -> a.status() > 0)
                 .forEach(a -> counts.merge(a.status(), 1, Integer::sum));
         return counts;
@@ -54,11 +74,11 @@ public final class LoadReport {
 
     /** 응답을 받은 요청 수. 0 이면 백분위는 값이 아니라 "측정 불가" 다. */
     public long responded() {
-        return attempts.stream().filter(a -> a.status() > 0).count();
+        return all().stream().filter(a -> a.status() > 0).count();
     }
 
     public Duration percentile(double p) {
-        List<Duration> sorted = attempts.stream()
+        List<Duration> sorted = all().stream()
                 .filter(a -> a.status() > 0)
                 .map(Attempt::latency)
                 .sorted(Comparator.naturalOrder())

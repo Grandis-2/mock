@@ -37,6 +37,16 @@ public final class LoadRunner {
     private final AtomicInteger inFlight = new AtomicInteger();
     private final AtomicInteger maxInFlight = new AtomicInteger();
 
+    /**
+     * 요청 번호마다 쓸 멱등 키. <b>보내기 전에 미리 만들어 둔다.</b>
+     *
+     * <p>두 가지 때문이다. 첫째, 끝나고 DB 를 <b>키로</b> 대조해야 한다 — 건수만 맞춰 보면 201 키
+     * 하나가 빠지고 5xx 키 하나가 들어가도 개수가 같아 최악의 버그를 놓친다(요구사항 8장
+     * "건수 합계만 비교하지 않음"). 둘째, 보내는 자리에서 키를 만들면 관찰 종료를 넘겨 바깥에서
+     * 결과를 적는 경로가 <b>어느 요청인지 말할 수 없다.</b>
+     */
+    private final String[] keys;
+
     public LoadRunner(LoadPlan plan) {
         this.plan = plan;
         this.client = HttpClient.newBuilder()
@@ -44,6 +54,11 @@ public final class LoadRunner {
                 .connectTimeout(Duration.ofSeconds(2))
                 .executor(Executors.newVirtualThreadPerTaskExecutor())
                 .build();
+        this.keys = new String[plan.totalRequests()];
+        for (int i = 0; i < keys.length; i++) {
+            // 키를 요청마다 새로 만든다. 같은 키를 쓰면 두 번째부터는 재생이라 DB 쓰기가 없어 부하가 아니다.
+            keys[i] = UUID.randomUUID().toString();
+        }
     }
 
     public LoadReport report() {
@@ -70,7 +85,8 @@ public final class LoadRunner {
             List<Future<?>> sent = new java.util.ArrayList<>(plan.totalRequests());
             for (int i = 0; i < plan.totalRequests(); i++) {
                 long dueNanos = i * intervalNanos;
-                sent.add(launcher.submit(() -> sendAt(startedAt, dueNanos)));
+                String key = keys[i];
+                sent.add(launcher.submit(() -> sendAt(startedAt, dueNanos, key)));
             }
             awaitAll(sent);
         }
@@ -78,24 +94,24 @@ public final class LoadRunner {
     }
 
     /** 계획한 시각까지 기다렸다가 보낸다. 늦었으면 바로 보낸다. */
-    private void sendAt(Instant startedAt, long dueNanos) {
+    private void sendAt(Instant startedAt, long dueNanos, String key) {
         long waitNanos = dueNanos - Duration.between(startedAt, Instant.now()).toNanos();
         if (waitNanos > 0) {
             try {
                 Thread.sleep(Duration.ofNanos(waitNanos));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                report.add(new LoadReport.Attempt(Outcome.NOT_SENT, 0, Duration.ZERO));
+                report.add(new LoadReport.Attempt(key, Outcome.NOT_SENT, 0, Duration.ZERO));
                 return;
             }
         }
-        send();
+        send(key);
     }
 
-    private void send() {
+    private void send(String key) {
         HttpRequest request = HttpRequest.newBuilder(URI.create(plan.baseUrl() + RESERVATIONS))
                 .header("Content-Type", "application/json")
-                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .header("Idempotency-Key", key)
                 .timeout(plan.responseTimeout())
                 .POST(HttpRequest.BodyPublishers.ofString(BODY))
                 .build();
@@ -105,15 +121,17 @@ public final class LoadRunner {
         try {
             HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
             report.add(new LoadReport.Attempt(
+                    key,
                     Outcome.ofStatus(response.statusCode()),
                     response.statusCode(),
                     Duration.between(sentAt, Instant.now())));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            report.add(new LoadReport.Attempt(Outcome.UNKNOWN, 0, Duration.between(sentAt, Instant.now())));
+            report.add(new LoadReport.Attempt(
+                    key, Outcome.UNKNOWN, 0, Duration.between(sentAt, Instant.now())));
         } catch (Exception e) {
             report.add(new LoadReport.Attempt(
-                    Outcome.ofFailure(e), 0, Duration.between(sentAt, Instant.now())));
+                    key, Outcome.ofFailure(e), 0, Duration.between(sentAt, Instant.now())));
         } finally {
             inFlight.decrementAndGet();
         }
@@ -124,9 +142,17 @@ public final class LoadRunner {
         maxInFlight.updateAndGet(previous -> Math.max(previous, now));
     }
 
+    /**
+     * 관찰 종료 조건까지 기다린다.
+     *
+     * <p>넘긴 요청에 {@code cancel(true)} 를 걸면 그 요청을 보내던 스레드도 인터럽트를 받아
+     * {@link #send} 쪽에서 결과를 한 번 더 적는다. <b>키로 적기 때문에</b> 같은 요청이 두 번
+     * 세어지지 않는다 — 두 번 세면 분류 합이 보낸 요청 수를 넘어, 합격 조건이 오판정된다.
+     */
     private void awaitAll(List<Future<?>> sent) {
         Instant deadline = Instant.now().plus(plan.rampUp()).plus(plan.drainTimeout());
-        for (Future<?> future : sent) {
+        for (int i = 0; i < sent.size(); i++) {
+            Future<?> future = sent.get(i);
             long left = Duration.between(Instant.now(), deadline).toMillis();
             try {
                 future.get(Math.max(left, 0), java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -136,7 +162,8 @@ public final class LoadRunner {
             } catch (Exception e) {
                 // 관찰 종료 조건을 넘긴 요청. 버리지 않고 결과 불명으로 센다.
                 future.cancel(true);
-                report.add(new LoadReport.Attempt(Outcome.UNKNOWN, 0, plan.responseTimeout()));
+                report.add(new LoadReport.Attempt(
+                        keys[i], Outcome.UNKNOWN, 0, plan.responseTimeout()));
             }
         }
     }
