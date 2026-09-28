@@ -73,7 +73,8 @@ public class DefaultFailureInjector implements FailureInjector {
      *
      * <p>지터가 0 이면 흔들지 않는다. 대기 시간을 단정해야 하는 단위 시험에서만 그렇게 둔다.
      *
-     * <p>지터가 1 을 넘어도 하한은 0 이다. 음수만큼 잘 수는 없다.
+     * <p>지터는 설정에서 0 ~ 1 로 막는다({@link MockProperties}). 1 이면 하한이 정확히 0 이고, 그보다
+     * 크면 하한만 잘려 평균이 올라가기 때문이다. 하한을 0 에서 한 번 더 자르는 것은 방어일 뿐이다.
      *
      * <p>시험이 직접 부를 수 있게 package-private 로 둔다. {@code Thread.sleep} 을 수만 번 재면
      * 스케줄러 오차가 분포보다 커져 무엇을 본 것인지 알 수 없다.
