@@ -226,6 +226,14 @@ public final class LoadReport {
                     .append("> 깨져도 되는 것은 아니다.\n\n");
         }
         appendNotSentWarning(out, counts.get(Outcome.NOT_SENT));
+        if (!plan.leavesRoomFor(injected)) {
+            out.append("> ## ⚠ 시나리오가 응답 타임아웃에 걸쳐 있다 — 결과 불명을 Mock 탓으로 읽지 않는다\n>\n");
+            out.append("> 주입한 지연이 최대 **").append(injected.percentileMs(100))
+                    .append("ms** 까지 뽑히고 허용 오버헤드(p99 ").append(plan.maxP99Overhead().toMillis())
+                    .append("ms)를 더하면 응답 타임아웃 ").append(plan.responseTimeout().toMillis())
+                    .append("ms 를 넘는다.\n> Mock 이 기준대로 빨라도 꼬리의 요청은 결과 불명이 된다. ")
+                    .append("시나리오의 지연을 낮추거나 타임아웃을 조정해야 판정에 쓸 수 있다.\n\n");
+        }
         out.append("> 조건은 2026-09-28 합의됐다. **이 실행이 판정하는 것은 ")
                 .append(plan.pass() == LoadPlan.Pass.CLASSIFY ? "분류" : "응답 지연")
                 .append("이다.**\n");

@@ -22,8 +22,11 @@ import java.time.format.DateTimeFormatter;
  * <p>시나리오는 b-todo Phase 5 의 세 가지다.
  * <ul>
  *   <li>{@code baseline} — 기본 설정 그대로. 평소 부하
- *   <li>{@code latency} — 지연 2000ms · 실패율 0. <b>관측 지연이 설정값과 비슷한지</b> 본다.
- *       크게 벗어나면 Mock 이 병목이라는 뜻이고, 그러면 본 서비스 측정도 믿을 수 없다
+ *   <li>{@code latency} — 지연 평균 1500ms · 실패율 0. <b>관측 지연이 설정값과 비슷한지</b> 본다.
+ *       크게 벗어나면 Mock 이 병목이라는 뜻이고, 그러면 본 서비스 측정도 믿을 수 없다.
+ *       <br>2000ms 였는데 지연이 평균으로 바뀌며(NV-121) 1500 으로 내렸다. 2000 이면 주입한 지연이
+ *       2800ms 까지 뽑혀 오버헤드가 조금만 붙어도 워커 타임아웃(3초)을 넘는다 — Mock 탓이 아닌데
+ *       결과 불명이 된다
  *   <li>{@code timeout} — 실패율 1.0 · TIMEOUT. 응답 없는 연결이 쌓이는지 본다
  * </ul>
  */
@@ -85,6 +88,14 @@ public final class LoadTestMain {
         System.out.printf("시나리오 %s · 패스 %s · %d건 / %s · 타임아웃 %s · configVersion %d%n",
                 scenario, plan.pass(), plan.totalRequests(), plan.rampUp(),
                 plan.responseTimeout(), configVersion);
+        System.out.println("주입한 지연: " + injected.describe());
+        if (!plan.leavesRoomFor(injected)) {
+            // 쏘기 전에 알린다. 5,000건을 다 쏘고 나서야 알면 실행 하나를 버린다.
+            System.out.printf("⚠ 주입 최대 %dms + 허용 오버헤드 %dms 가 응답 타임아웃 %dms 를 넘는다. "
+                            + "꼬리의 요청은 Mock 이 빨라도 결과 불명이 된다.%n",
+                    injected.percentileMs(100), plan.maxP99Overhead().toMillis(),
+                    plan.responseTimeout().toMillis());
+        }
         System.out.println("설정: " + configBody);
 
         LoadRunner runner = new LoadRunner(plan);
@@ -119,7 +130,7 @@ public final class LoadTestMain {
             case "baseline" -> """
                     {"registerLatencyMs":500,"failureRate":0.05,"failureMode":"HTTP_5XX"}""";
             case "latency" -> """
-                    {"registerLatencyMs":2000,"failureRate":0.0,"failureMode":"HTTP_5XX"}""";
+                    {"registerLatencyMs":1500,"failureRate":0.0,"failureMode":"HTTP_5XX"}""";
             case "timeout" -> """
                     {"registerLatencyMs":0,"failureRate":1.0,"failureMode":"TIMEOUT"}""";
             default -> throw new IllegalArgumentException(
