@@ -22,3 +22,6 @@ mock:
   failure-rate: 0.0
   failure-mode: HTTP_5XX
   timeout-hold-ms: 1000
+  # 단위 시험만 지터 0 으로 돈다. 흔들리면 "설정만큼 기다린다" 를 단정할 수 없다.
+  # 운영 · 시연 · 부하 판정은 기본값 0.4 (평균 500ms) 다.
+  latency-jitter: 0.0

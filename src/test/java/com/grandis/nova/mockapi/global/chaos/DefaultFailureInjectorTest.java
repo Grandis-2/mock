@@ -71,4 +71,20 @@ class DefaultFailureInjectorTest {
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         assertThat(elapsedMs).isGreaterThanOrEqualTo(300);
     }
+
+    /**
+     * 이 클래스는 시험 설정에서 지터를 0 으로 두고 돈다. 그래야 "설정만큼 기다린다" 를 단정할 수
+     * 있다. 그 전제가 실제로 성립하는지 본다 — 깨지면 위 시험들이 우연히 통과하게 된다.
+     *
+     * <p>흔드는 쪽은 {@link LatencyJitterTest} 가 본다.
+     */
+    @Test
+    @DisplayName("시험 설정의 지터 0 에서는 설정값 그대로다")
+    void zeroJitterIsFixed() {
+        DefaultFailureInjector real = (DefaultFailureInjector) injector;
+
+        for (int i = 0; i < 100; i++) {
+            assertThat(real.jittered(500)).isEqualTo(500);
+        }
+    }
 }

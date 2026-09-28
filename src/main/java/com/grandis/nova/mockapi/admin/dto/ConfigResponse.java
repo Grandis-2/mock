@@ -12,10 +12,17 @@ import java.time.Instant;
  * 않기 위해서다(요구사항 4.4).
  *
  * <p>안쪽 모델({@link ConfigSnapshot})을 그대로 내보내지 않는다. 그쪽은 A 파트와의 계약이라
- * 응답에 필드를 늘릴 때마다 계약을 건드리게 된다.
+ * 응답에 필드를 늘릴 때마다 계약을 건드리게 된다. {@code latencyJitter} 가 그 예다 — 응답에는
+ * 있지만 스냅샷에는 없다.
+ *
+ * @param registerLatencyMs 지연의 <b>평균</b>. 실제 대기는 {@code latencyJitter} 만큼 흔들린다
+ * @param latencyJitter     지연을 흔드는 폭. 실제 대기는 {@code 평균 × (1 ∓ 이 값)} 의 균등분포다.
+ *                          설정 파일로만 정하고 이 API 로는 바꾸지 않는다. 부하 하네스가 이 값을 읽어
+ *                          주입한 지연의 백분위를 계산하고, 요구사항 5.4 대로 적용한 설정을 기록한다
  */
 public record ConfigResponse(
         int registerLatencyMs,
+        double latencyJitter,
         double failureRate,
         FailureMode failureMode,
         int configVersion,
@@ -23,10 +30,11 @@ public record ConfigResponse(
 ) {
 
     /** 중첩된 Applied 를 평평한 응답 모양으로 편다. */
-    public static ConfigResponse from(MockConfigStore.Applied applied) {
+    public static ConfigResponse from(MockConfigStore.Applied applied, double latencyJitter) {
         ConfigSnapshot snapshot = applied.snapshot();
         return new ConfigResponse(
                 snapshot.registerLatencyMs(),
+                latencyJitter,
                 snapshot.failureRate(),
                 snapshot.failureMode(),
                 snapshot.configVersion(),
