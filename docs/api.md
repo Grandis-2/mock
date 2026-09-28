@@ -104,6 +104,11 @@ Mock 은 남의 회사 시스템을 연기한다. 우리 오류 포맷을 따르
 - 실패는 **커밋 전에** 발생한다. 아무것도 저장하지 않는다.
 - 5% 는 호출 실패 조건이며 예약의 최종 실패율을 강제하지 않는다. (요구사항 5.1)
 - 관측 비율이 매번 정확히 5% 일 것을 요구하지 않는다. (요구사항 5.4)
+- **지연은 평균값이다.** 주제와 요구사항 2장이 *"평균 500ms 지연"* 으로 정했다. 요청마다
+  `registerLatencyMs × (1 ∓ latencyJitter)` 사이에서 균등하게 뽑는다. 기본값이면 **300 ~ 700ms**,
+  평균 500ms 다. `latencyJitter` 는 설정 파일로 정하고(기본 0.4) 설정 API 로는 바꾸지 않는다.
+- 균등분포를 쓰는 이유는 부하 판정이다. 주입한 지연의 백분위를 미리 계산할 수 있어(기본값에서
+  p95 680ms · p99 696ms) 관측값에서 그 몫을 빼면 Mock 이 실제로 쓴 시간이 남는다.
 
 ## 멱등 키
 
@@ -224,7 +229,7 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 
 **트랜잭션 밖**
 
-1. 설정된 `registerLatencyMs` 만큼 대기한다. **락을 아직 잡지 않았으므로 그 사이 취소 요청이 표식을 남길 수 있다.**
+1. 설정된 `registerLatencyMs` 를 **평균으로** 대기한다(`× (1 ∓ latencyJitter)` 균등분포). **락을 아직 잡지 않았으므로 그 사이 취소 요청이 표식을 남길 수 있다.**
 2. 설정된 `failureRate` 로 일시 실패를 발생시킨다. 커밋 전이므로 아무것도 저장하지 않는다.
 
 **트랜잭션 안**
@@ -588,12 +593,22 @@ Accept: application/json
 ```json
 {
   "registerLatencyMs": 500,
+  "latencyJitter": 0.4,
   "failureRate": 0.05,
   "failureMode": "HTTP_5XX",
   "configVersion": 4,
   "appliedAt": "2026-09-16T09:40:00.000Z"
 }
 ```
+
+| 필드 | 설명 |
+| --- | --- |
+| `registerLatencyMs` | 지연의 **평균** |
+| `latencyJitter` | 지연을 흔드는 폭. 실제 대기는 `평균 × (1 ∓ 이 값)` 균등분포. **조회만 되고 변경은 안 된다** — 설정 파일로 정한다 |
+| `configVersion` · `appliedAt` | 설정을 바꿀 때마다 오르는 버전과 그 시각 |
+
+`latencyJitter` 를 응답에 싣는 이유는 둘이다. 부하 하네스가 이 값으로 주입한 지연의 백분위를
+계산하고, 요구사항 5.4 가 *"적용한 설정과 실제 호출 결과를 함께 기록"* 하라고 정했다.
 
 ERD 는 설정 테이블을 두지 않는다 — 환경변수 기본값 + Mock 메모리이며 재시작하면 기본값으로 돌아간다. 등록 기록은 테이블이라 그대로 남는다.
 
@@ -629,9 +644,13 @@ Accept: application/json
 
 | 필드 | 타입 | 필수 | 제약 |
 | --- | --- | --- | --- |
-| `registerLatencyMs` | integer | 필수 | `default=500` · `min=0` · `max=60000` |
+| `registerLatencyMs` | integer | 필수 | 지연의 **평균**. `default=500` · `min=0` · `max=60000` |
 | `failureRate` | number | 필수 | `default=0.05` · `min=0` · `max=1` |
 | `failureMode` | string | 선택 | `HTTP_5XX`(기본) / `TIMEOUT` |
+
+`latencyJitter` 는 받지 않는다. 보내면 모르는 필드라 400 이다. 실행 중에 바꿀 수 있으면 A 파트와의
+계약인 `ConfigSnapshot` 이 늘어나고, 부하 판정 도중 분포가 바뀌면 주입한 몫을 빼낼 수 없다.
+`timeoutHoldMs` 와 같은 취급이다.
 
 ```json
 {
