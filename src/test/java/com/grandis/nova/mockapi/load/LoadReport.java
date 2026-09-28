@@ -203,11 +203,12 @@ public final class LoadReport {
     /**
      * @param configVersion 이 실행에 적용된 Mock 설정 버전 (요구사항 5.4)
      * @param configBody    같은 목적. 지연·실패율을 그대로 남긴다
+     * @param injected      Mock 이 일부러 넣은 지연의 분포. 오버헤드는 관측값에서 이것의 같은 백분위를 뺀다
      * @param maxInFlight   동시에 떠 있던 요청의 최대치. 서버 쪽 커넥션 수의 대용값이다
      * @param elapsed       첫 발사부터 마지막 응답까지
      */
     public String render(LoadPlan plan, String configBody, int configVersion,
-                         int registerLatencyMs, int maxInFlight, Duration launchLag, Duration elapsed,
+                         InjectedLatency injected, int maxInFlight, Duration launchLag, Duration elapsed,
                          RegistrationSnapshot db) {
         Map<Outcome, Integer> counts = byOutcome();
         StringBuilder out = new StringBuilder();
@@ -263,7 +264,7 @@ public final class LoadReport {
                 .append(" | HTTP_5XX 모드. 응답이 없다는 것은 제시간에 못 답했다는 뜻이다 |\n");
         out.append("| 오버헤드 기준 | p95 ").append(plan.maxP95Overhead().toMillis())
                 .append("ms · p99 ").append(plan.maxP99Overhead().toMillis())
-                .append("ms | 관측 − 설정 지연. 2026-09-28 실측으로 확정 |\n");
+                .append("ms | 관측 − 주입한 지연의 같은 백분위. 2026-09-28 실측으로 확정 |\n");
         out.append("| 발사 지연 한계 | ").append(plan.maxLaunchLag().toMillis())
                 .append("ms | 넘으면 목표 부하를 만들지 못한 실행이다 |\n\n");
 
@@ -293,21 +294,23 @@ public final class LoadReport {
         }
 
         out.append("## 지표\n\n");
-        out.append("설정 지연 ").append(registerLatencyMs).append("ms 를 뺀 **오버헤드**로 본다. ")
+        out.append("주입한 지연은 **").append(injected.describe()).append("** 이다. 관측 백분위에서 ")
+                .append("주입한 지연의 **같은 백분위**를 뺀 값을 **오버헤드**로 본다 — Mock 이 실제로 쓴 시간이다. ")
                 .append("절대 백분위로 두면 설정 500ms 에 1.5초도 통과한다.\n\n");
-        out.append("| 지표 | 관측 | 오버헤드 | 기준 | 판정 |\n| --- | --- | --- | --- | --- |\n");
-        appendOverhead(out, "p95", percentile(95), registerLatencyMs,
+        out.append("| 지표 | 관측 | 주입한 지연 | 오버헤드 | 기준 | 판정 |\n")
+                .append("| --- | --- | --- | --- | --- | --- |\n");
+        appendOverhead(out, "p95", percentile(95), injected.percentileMs(95),
                 plan.maxP95Overhead(), responded());
-        appendOverhead(out, "p99", percentile(99), registerLatencyMs,
+        appendOverhead(out, "p99", percentile(99), injected.percentileMs(99),
                 plan.maxP99Overhead(), responded());
         out.append("| 에러율(접수 성공 제외) | ").append(percent(failureRate()))
-                .append(" | — | — | 참고 |\n");
+                .append(" | — | — | — | 참고 |\n");
         out.append("| **미완료(결과 불명)** | ").append(counts.get(Outcome.UNKNOWN))
-                .append("건 | — | — | 위 대조 참고 |\n");
-        out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | ")
-                .append(expectedInFlight(plan, registerLatencyMs))
+                .append("건 | — | — | — | 위 대조 참고 |\n");
+        out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | — | ")
+                .append(expectedInFlight(plan, injected.meanMs()))
                 .append(" | 넘으면 어딘가에서 대기가 쌓였다 |\n");
-        out.append("| 전체 소요 | ").append(elapsed.toMillis()).append("ms | — | — | — |\n\n");
+        out.append("| 전체 소요 | ").append(elapsed.toMillis()).append("ms | — | — | — | — |\n\n");
 
         out.append("> 백분위는 응답을 받은 요청만으로 계산했다. 응답이 없는 요청에는 응답 지연이 없다.\n");
         out.append("> 서버 쪽 실제 커넥션 수는 클라이언트에서 볼 수 없다. 위 값은 동시에 떠 있던\n");
@@ -427,15 +430,16 @@ public final class LoadReport {
      * 것처럼 보인다. 요구사항 8장이 실패를 결과에서 빼지 말라고 한 것과 정확히 반대되는 왜곡이다.
      */
     private static void appendOverhead(StringBuilder out, String name, Duration observed,
-                                       int registerLatencyMs, Duration target, long responded) {
+                                       long injectedMs, Duration target, long responded) {
         out.append("| ").append(name).append(" | ");
         if (responded == 0) {
-            out.append("측정 불가 | — | ").append(target.toMillis()).append("ms | 응답 0건 |\n");
+            out.append("측정 불가 | ").append(injectedMs).append("ms | — | ")
+                    .append(target.toMillis()).append("ms | 응답 0건 |\n");
             return;
         }
-        long overhead = observed.toMillis() - registerLatencyMs;
-        out.append(observed.toMillis()).append("ms | ").append(overhead).append("ms | ")
-                .append(target.toMillis()).append("ms | ")
+        long overhead = observed.toMillis() - injectedMs;
+        out.append(observed.toMillis()).append("ms | ").append(injectedMs).append("ms | ")
+                .append(overhead).append("ms | ").append(target.toMillis()).append("ms | ")
                 .append(overhead <= target.toMillis() ? "이내" : "초과").append(" |\n");
     }
 

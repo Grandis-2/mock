@@ -70,7 +70,11 @@ public final class LoadTestMain {
         applyScenario(baseUrl, scenario);
         String configBody = get(baseUrl + CONFIG);
         int configVersion = readConfigVersion(configBody);
-        int registerLatencyMs = readNumber(configBody, "registerLatencyMs");
+        // 지연은 평균값이라 요청마다 흔들린다. 흔드는 폭을 알아야 관측값에서 주입한 몫을 뺄 수 있다.
+        // 평균화 이전 Mock 은 이 필드가 없으므로 0(고정)으로 본다.
+        InjectedLatency injected = new InjectedLatency(
+                readNumber(configBody, "registerLatencyMs"),
+                readDecimal(configBody, "latencyJitter", 0.0));
 
         LoadPlan plan = switch (pass) {
             case "classify" -> LoadPlan.classify(baseUrl, requests);
@@ -91,7 +95,7 @@ public final class LoadTestMain {
         RegistrationSnapshot db = RegistrationSnapshot.take(jdbcUrl, dbUser, dbPassword);
 
         String report = runner.report()
-                .render(plan, configBody, configVersion, registerLatencyMs,
+                .render(plan, configBody, configVersion, injected,
                         runner.maxInFlight(), runner.maxLaunchLag(), elapsed, db);
         System.out.println();
         System.out.println(report);
@@ -151,5 +155,12 @@ public final class LoadTestMain {
         var matcher = java.util.regex.Pattern.compile("\"" + field + "\"\\s*:\\s*(\\d+)")
                 .matcher(configBody);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : -1;
+    }
+
+    /** 소수 하나를 긁는다. 필드가 없으면 기본값이다. */
+    private static double readDecimal(String configBody, String field, double absent) {
+        var matcher = java.util.regex.Pattern.compile("\"" + field + "\"\\s*:\\s*([0-9.]+)")
+                .matcher(configBody);
+        return matcher.find() ? Double.parseDouble(matcher.group(1)) : absent;
     }
 }
