@@ -40,6 +40,10 @@ public final class LoadRunner {
     private final AtomicInteger inFlight = new AtomicInteger();
     private final AtomicInteger maxInFlight = new AtomicInteger();
 
+    /** 계획한 발사 시각보다 얼마나 늦게 쐈는지의 최대치. 목표 부하를 만들었는지의 근거다. */
+    private final java.util.concurrent.atomic.AtomicLong maxLaunchLagNanos =
+            new java.util.concurrent.atomic.AtomicLong();
+
     /**
      * 요청 번호마다 쓸 멱등 키. <b>보내기 전에 미리 만들어 둔다.</b>
      *
@@ -66,6 +70,10 @@ public final class LoadRunner {
 
     public LoadReport report() {
         return report;
+    }
+
+    public Duration maxLaunchLag() {
+        return Duration.ofNanos(maxLaunchLagNanos.get());
     }
 
     public int maxInFlight() {
@@ -96,10 +104,18 @@ public final class LoadRunner {
         return Duration.between(startedAt, Instant.now());
     }
 
-    /** 계획한 시각까지 기다렸다가 보낸다. 늦었으면 바로 보낸다. */
+    /**
+     * 계획한 시각까지 기다렸다가 보낸다. 늦었으면 바로 보내고 <b>얼마나 늦었는지 남긴다.</b>
+     *
+     * <p>이 시험은 5,000건을 10초에 고르게 쏘는 것이 전제다. 발사가 몇 초씩 밀렸다면 그 실행은
+     * <b>목표 부하를 만들지 못한 것</b>이고, 요구사항 8장은 그런 시험을 성능 합격으로 판정하지
+     * 않는다. 판정에서 뺄 근거가 사람의 관찰이 아니라 숫자여야 해서 여기서 기록한다.
+     */
     private void sendAt(Instant startedAt, long dueNanos, String key) {
         long waitNanos = dueNanos - Duration.between(startedAt, Instant.now()).toNanos();
-        if (waitNanos > 0) {
+        if (waitNanos <= 0) {
+            trackLag(-waitNanos);
+        } else {
             try {
                 Thread.sleep(Duration.ofNanos(waitNanos));
             } catch (InterruptedException e) {
@@ -109,6 +125,10 @@ public final class LoadRunner {
             }
         }
         send(key);
+    }
+
+    private void trackLag(long lagNanos) {
+        maxLaunchLagNanos.updateAndGet(previous -> Math.max(previous, lagNanos));
     }
 
     private void send(String key) {

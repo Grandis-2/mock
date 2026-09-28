@@ -207,12 +207,23 @@ public final class LoadReport {
      * @param elapsed       첫 발사부터 마지막 응답까지
      */
     public String render(LoadPlan plan, String configBody, int configVersion,
-                         int registerLatencyMs, int maxInFlight, Duration elapsed,
+                         int registerLatencyMs, int maxInFlight, Duration launchLag, Duration elapsed,
                          RegistrationSnapshot db) {
         Map<Outcome, Integer> counts = byOutcome();
         StringBuilder out = new StringBuilder();
 
         out.append("# 부하 시험 결과\n\n");
+        boolean targetLoad = plan.targetLoadAchieved(launchLag);
+        if (!targetLoad) {
+            out.append("> ## ⚠ 목표 부하를 만들지 못했다 — 성능 판정에서 뺀다\n>\n");
+            out.append("> 계획한 발사 시각보다 최대 **").append(launchLag.toMillis())
+                    .append("ms** 늦게 쐈다(한계 ").append(plan.maxLaunchLag().toMillis())
+                    .append("ms). 5,000건을 10초에 고르게 쏘는 것이 전제인데 그만큼 밀렸다는 건\n")
+                    .append("> 클라이언트나 PC 가 멈칫했다는 뜻이다. 요구사항 8장이 *\"목표 부하를 만들지 못한\n")
+                    .append("> 시험은 성능 합격으로 판정하지 않는다\"* 고 정했다.\n>\n");
+            out.append("> **아래 계약 판정(키 대조 · 분류 합)은 그대로 본다.** 부하가 덜 걸렸다고 계약이\n")
+                    .append("> 깨져도 되는 것은 아니다.\n\n");
+        }
         out.append("> 조건은 2026-09-28 합의됐다. **이 실행이 판정하는 것은 ")
                 .append(plan.pass() == LoadPlan.Pass.CLASSIFY ? "분류" : "응답 지연")
                 .append("이다.**\n");
@@ -248,10 +259,12 @@ public final class LoadReport {
         out.append("| 관찰 종료 조건 | 발사 후 ").append(plan.drainTimeout())
                 .append(" | 응답 타임아웃보다 길어야 한다 (코드가 강제) |\n");
         out.append("| 결과 불명 허용 | ").append(percent(plan.maxUnknownRate()))
-                .append(" | HTTP_5XX 모드. **잠정** — 장비 분리 후 확정 |\n");
-        out.append("| 오버헤드 기준 | max(").append(plan.p95OverheadFloor().toMillis())
-                .append("ms, 설정 지연 × ").append(plan.overheadRatio())
-                .append(") | p95. **잠정** — 패스 B 실측 후 확정 |\n\n");
+                .append(" | HTTP_5XX 모드. 응답이 없다는 것은 제시간에 못 답했다는 뜻이다 |\n");
+        out.append("| 오버헤드 기준 | p95 ").append(plan.maxP95Overhead().toMillis())
+                .append("ms · p99 ").append(plan.maxP99Overhead().toMillis())
+                .append("ms | 관측 − 설정 지연. 2026-09-28 실측으로 확정 |\n");
+        out.append("| 발사 지연 한계 | ").append(plan.maxLaunchLag().toMillis())
+                .append("ms | 넘으면 목표 부하를 만들지 못한 실행이다 |\n\n");
 
         out.append("## 요청 분류 (요구사항 8장)\n\n");
         out.append("합계가 보낸 요청 수와 같아야 한다. 실패와 미전송을 결과에서 빼지 않는다.\n\n");
@@ -283,14 +296,16 @@ public final class LoadReport {
                 .append("절대 백분위로 두면 설정 500ms 에 1.5초도 통과한다.\n\n");
         out.append("| 지표 | 관측 | 오버헤드 | 기준 | 판정 |\n| --- | --- | --- | --- | --- |\n");
         appendOverhead(out, "p95", percentile(95), registerLatencyMs,
-                plan.p95OverheadTarget(registerLatencyMs), responded());
+                plan.maxP95Overhead(), responded());
         appendOverhead(out, "p99", percentile(99), registerLatencyMs,
-                plan.p99OverheadTarget(registerLatencyMs), responded());
+                plan.maxP99Overhead(), responded());
         out.append("| 에러율(접수 성공 제외) | ").append(percent(failureRate()))
                 .append(" | — | — | 참고 |\n");
         out.append("| **미완료(결과 불명)** | ").append(counts.get(Outcome.UNKNOWN))
                 .append("건 | — | — | 위 대조 참고 |\n");
-        out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | — | — |\n");
+        out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | ")
+                .append(expectedInFlight(plan, registerLatencyMs))
+                .append(" | 커넥션 대기가 쌓이면 이론값을 크게 넘는다 |\n");
         out.append("| 전체 소요 | ").append(elapsed.toMillis()).append("ms | — | — | — |\n\n");
 
         out.append("> 백분위는 응답을 받은 요청만으로 계산했다. 응답이 없는 요청에는 응답 지연이 없다.\n");
@@ -308,6 +323,22 @@ public final class LoadReport {
      * <p>Mock 이 증명할 것은 빠르다는 게 아니라 <b>부하 중에도 "실패는 커밋 전" 이라는 약속을
      * 지켰다는 것</b>이다.
      */
+    /**
+     * 동시에 떠 있을 요청 수의 이론값. {@code RPS × 한 건이 걸리는 시간} 이다.
+     *
+     * <p>관측치가 이것을 크게 넘으면 요청이 어딘가에서 기다리며 쌓였다는 뜻이다. 2026-09-28
+     * 판정에서 커넥션 풀 20 일 때 baseline 관측 480(이론 ~300), latency 1,342(이론 ~1,035)
+     * 였고, 풀을 30 으로 올리자 303 · 1,057 로 이론값에 붙었다.
+     */
+    private static String expectedInFlight(LoadPlan plan, int registerLatencyMs) {
+        if (plan.rampUp().isZero()) {
+            return "—";
+        }
+        double rps = (double) plan.totalRequests() / plan.rampUp().toSeconds();
+        double perRequestSec = (registerLatencyMs + plan.maxP95Overhead().toMillis()) / 1000.0;
+        return "이론 ~" + Math.round(rps * perRequestSec);
+    }
+
     private void appendVerification(StringBuilder out, LoadPlan plan,
                                     Map<Outcome, Integer> counts, RegistrationSnapshot db) {
         List<Mismatch> mismatches = verifyAgainst(db);

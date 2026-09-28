@@ -92,7 +92,7 @@ public final class LoadTestMain {
 
         String report = runner.report()
                 .render(plan, configBody, configVersion, registerLatencyMs,
-                        runner.maxInFlight(), elapsed, db);
+                        runner.maxInFlight(), runner.maxLaunchLag(), elapsed, db);
         System.out.println();
         System.out.println(report);
 

@@ -14,9 +14,9 @@ import java.time.Duration;
  * @param responseTimeout   이 시간 안에 응답이 없으면 결과 불명으로 센다. 패스마다 다르다
  * @param drainTimeout      발사가 끝난 뒤 남은 응답을 기다리는 한계. 관찰 종료 조건. 합의값 30초
  * @param maxUnknownRate    {@code HTTP_5XX} 모드에서 허용하는 결과 불명 비율
- * @param p95OverheadFloor  p95 오버헤드 허용치의 하한
- * @param p99OverheadFloor  p99 오버헤드 허용치의 하한
- * @param overheadRatio     설정 지연에 비례하는 허용치. 실제 기준은 {@code max(하한, 설정 지연 × 이 값)}
+ * @param maxP95Overhead    p95 에서 설정 지연을 뺀 값의 허용치
+ * @param maxP99Overhead    p99 에서 설정 지연을 뺀 값의 허용치
+ * @param maxLaunchLag      계획한 발사 시각보다 늦어도 되는 한계. 넘으면 목표 부하를 만들지 못한 것이다
  */
 public record LoadPlan(
         Pass pass,
@@ -26,9 +26,9 @@ public record LoadPlan(
         Duration responseTimeout,
         Duration drainTimeout,
         double maxUnknownRate,
-        Duration p95OverheadFloor,
-        Duration p99OverheadFloor,
-        double overheadRatio
+        Duration maxP95Overhead,
+        Duration maxP99Overhead,
+        Duration maxLaunchLag
 ) {
 
     /**
@@ -98,14 +98,20 @@ public record LoadPlan(
                 Duration.ofSeconds(10),
                 responseTimeout,
                 Duration.ofSeconds(30),
-                // 잠정. HTTP_5XX 모드에서 응답이 없다는 것은 Mock 이 제시간에 못 답했다는 뜻이므로
-                // 0 이 목표다. 허용 폭은 장비를 분리한 뒤 다시 재서 정한다.
+                // HTTP_5XX 모드에서 응답이 없다는 것은 Mock 이 제시간에 못 답했다는 뜻이다.
+                // 2026-09-28 판정에서 깨끗한 회차는 전부 0건이었으므로 0 으로 확정했다.
                 0.0,
-                // 잠정. 절대 p95 로 두면 설정 500ms 에 1.5초도 통과한다. 오버헤드로 보고,
-                // 설정 지연이 작을 때를 위해 하한을 둔다. 두 숫자는 패스 B 실측 뒤 확정한다.
-                Duration.ofMillis(300),
-                Duration.ofMillis(600),
-                0.3);
+                // 2026-09-28 판정 실측으로 확정. 깨끗한 회차의 최대가 p95 106ms · p99 187ms 라
+                // 두 배 남짓 여유를 뒀다.
+                //
+                // 비율 성분을 뺀 이유 — 오버헤드가 설정 지연에 비례하지 않는다. 설정 500ms 에서
+                // 99ms, 2000ms 에서 106ms 로 거의 같았다. HTTP · DB 커밋 · 스케줄링의 고정 비용이라
+                // 그렇다. 비례로 두면 지연을 크게 잡을수록 기준이 헐거워진다.
+                Duration.ofMillis(250),
+                Duration.ofMillis(400),
+                // 5,000건을 10초에 고르게 쏘는 것이 전제다. 1초 넘게 밀렸다면 클라이언트나 PC 가
+                // 멈칫한 것이고, 그 실행은 목표 부하를 만들지 못했다.
+                Duration.ofSeconds(1));
     }
 
     /** 발사 간격. 요청을 한 번에 쏟지 않고 이 간격으로 고르게 낸다. */
@@ -113,17 +119,14 @@ public record LoadPlan(
         return totalRequests <= 1 ? Duration.ZERO : rampUp.dividedBy(totalRequests);
     }
 
-    /** p95 허용 오버헤드. 설정 지연에 비례하되 하한을 둔다. */
-    public Duration p95OverheadTarget(int registerLatencyMs) {
-        return overheadTarget(p95OverheadFloor, registerLatencyMs);
-    }
-
-    public Duration p99OverheadTarget(int registerLatencyMs) {
-        return overheadTarget(p99OverheadFloor, registerLatencyMs);
-    }
-
-    private Duration overheadTarget(Duration floor, int registerLatencyMs) {
-        Duration scaled = Duration.ofMillis(Math.round(registerLatencyMs * overheadRatio));
-        return floor.compareTo(scaled) >= 0 ? floor : scaled;
+    /**
+     * 계획한 대로 발사했는가. 아니면 <b>목표 부하를 만들지 못한 실행</b>이라 성능 판정에서 뺀다.
+     *
+     * <p>요구사항 8장의 "목표 부하를 만들지 못한 시험은 성능 합격으로 판정하지 않는다" 를 숫자로
+     * 옮긴 것이다. 계약 판정(키 대조 · 분류 합)은 이것과 무관하게 그대로 본다 — 부하가 덜 걸렸다고
+     * 계약이 깨져도 되는 것은 아니다.
+     */
+    public boolean targetLoadAchieved(Duration observedLaunchLag) {
+        return observedLaunchLag.compareTo(maxLaunchLag) <= 0;
     }
 }
