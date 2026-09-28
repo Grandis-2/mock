@@ -169,6 +169,46 @@ class MockConfigApiTest {
         assertThat(store.applied()).isEqualTo(before);
     }
 
+    /**
+     * 지연이 평균이라 실제 대기가 얼마나 흔들리는지 알아야 결과를 읽을 수 있다. 부하 하네스가 이
+     * 값으로 주입한 지연의 백분위를 계산하고, 요구사항 5.4 대로 적용한 설정을 기록한다.
+     */
+    @Test
+    @DisplayName("조회 · 변경 응답에 지연 지터가 함께 나간다")
+    void exposesLatencyJitter() throws Exception {
+        mvc.perform(get(PATH))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.latencyJitter").value(properties.latencyJitter()));
+
+        mvc.perform(put(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"registerLatencyMs":500,"failureRate":0.05}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.latencyJitter").value(properties.latencyJitter()));
+    }
+
+    /**
+     * 지터는 설정 파일로만 정한다. 실행 중에 바꿀 수 있으면 A 파트와의 계약인 {@code ConfigSnapshot}
+     * 이 늘어나고, 부하 판정 도중 분포가 바뀌면 주입한 몫을 빼낼 수 없다.
+     */
+    @Test
+    @DisplayName("latencyJitter 는 설정 API 로 바꿀 수 없다 — 400 이고 설정도 그대로다")
+    void rejectsLatencyJitter() throws Exception {
+        var before = store.applied();
+
+        mvc.perform(put(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"registerLatencyMs":500,"failureRate":0.05,"latencyJitter":0.0}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errorMessage",
+                        containsString("latencyJitter 은(는) 알 수 없는 필드입니다.")));
+
+        assertThat(store.applied()).isEqualTo(before);
+    }
+
     @Test
     @DisplayName("failureMode 를 생략하면 HTTP_5XX 다")
     void failureModeDefaults() throws Exception {

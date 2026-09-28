@@ -3,6 +3,7 @@ package com.grandis.nova.mockapi.admin;
 import com.grandis.nova.mockapi.admin.dto.ConfigResponse;
 import com.grandis.nova.mockapi.admin.dto.ConfigUpdateRequest;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
+import com.grandis.nova.mockapi.global.config.MockProperties;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -24,14 +25,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class MockConfigController {
 
     private final MockConfigStore store;
+    private final MockProperties properties;
 
-    public MockConfigController(MockConfigStore store) {
+    public MockConfigController(MockConfigStore store, MockProperties properties) {
         this.store = store;
+        this.properties = properties;
     }
 
     @GetMapping
     public ConfigResponse get() {
-        return ConfigResponse.from(store.applied());
+        return ConfigResponse.from(store.applied(), properties.latencyJitter());
     }
 
     /**
@@ -46,6 +49,6 @@ public class MockConfigController {
         return ConfigResponse.from(store.update(
                 request.registerLatencyMs(),
                 request.failureRate(),
-                request.failureModeOrDefault()));
+                request.failureModeOrDefault()), properties.latencyJitter());
     }
 }
