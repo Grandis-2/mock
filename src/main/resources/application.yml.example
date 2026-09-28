@@ -42,7 +42,11 @@ server:
 # 지연·실패 설정의 기본값. 실행 중에는 PUT /external/config 로 바꾸고,
 # 재기동하면 이 값으로 돌아간다(ERD: 설정 테이블을 두지 않는다).
 mock:
+  # 평균이다. 실제 대기는 아래 지터만큼 흔들린다 (요구사항: "평균 500ms 지연").
   register-latency-ms: 500
+  # 지연을 흔드는 폭. 실제 대기 = 평균 × (1 ∓ 0.4) 의 균등분포.
+  # 운영 · 시연 · 부하 판정 모두 이 값으로 돈다. 판정은 주입한 지연의 p95 를 계산해 빼낸다.
+  latency-jitter: 0.4
   failure-rate: 0.05
   failure-mode: HTTP_5XX
   # TIMEOUT 모드에서 응답 없이 연결을 유지하는 시간.
