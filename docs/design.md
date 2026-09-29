@@ -40,9 +40,10 @@ com.grandis.nova.mockapi/
 
 **패키지는 같이 바뀌는 것끼리 묶는다.** `api` 는 [api.md](api.md) 가 바뀔 때, `application` 은 아래 처리
 순서가 바뀔 때, `domain` 은 [schema.sql](schema.sql) 이 바뀔 때 고치는 곳이다. 의존은 `api → application →
-domain` 한 방향이라, 처리 층은 요청 DTO 대신 `RegisterCommand` 를 받는다. `control` 에는 자기 테이블이
-없어 `domain` 이 없다 — 설정 · 결함 보관소는 등록 파트와의 계약이라 `global/chaos` 에 있고, 초기화가
-지우는 것은 등록 원장이다.
+domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 아래층 어디든 쓸 수 있어 응답 DTO 는 엔티티
+(`Registration`)를 직접 읽는다. 거꾸로는 안 되므로 처리 층은 요청 DTO 대신 `RegisterCommand` 를 받는다.
+`control` 에는 자기 테이블이 없어 `domain` 이 없다 — 설정 · 결함 보관소는 등록 파트와의 계약이라
+`global/chaos` 에 있고, 초기화가 지우는 것은 등록 원장이다.
 
 층 밖에서 쓰지 않는 클래스는 package-private 으로 숨긴다(`DuplicateKeyRetry` · `DuplicateKey` ·
 `Identifiers`). 같은 층끼리만 쓰므로 나눠도 숨김이 유지된다.
