@@ -1,7 +1,5 @@
-package com.grandis.nova.mockapi.admin;
+package com.grandis.nova.mockapi.control.api;
 
-import com.grandis.nova.mockapi.admin.dto.ConfigResponse;
-import com.grandis.nova.mockapi.admin.dto.ConfigUpdateRequest;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import jakarta.validation.Valid;

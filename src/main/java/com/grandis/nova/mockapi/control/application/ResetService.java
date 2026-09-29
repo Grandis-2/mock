@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.admin;
+package com.grandis.nova.mockapi.control.application;
 
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;

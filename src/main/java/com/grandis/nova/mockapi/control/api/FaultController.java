@@ -1,7 +1,5 @@
-package com.grandis.nova.mockapi.admin;
+package com.grandis.nova.mockapi.control.api;
 
-import com.grandis.nova.mockapi.admin.dto.FaultRequest;
-import com.grandis.nova.mockapi.admin.dto.FaultResponse;
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import jakarta.validation.Valid;
 import java.time.Instant;

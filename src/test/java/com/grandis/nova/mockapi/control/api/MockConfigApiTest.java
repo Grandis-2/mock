@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.admin;
+package com.grandis.nova.mockapi.control.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;

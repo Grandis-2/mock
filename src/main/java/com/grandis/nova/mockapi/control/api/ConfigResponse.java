@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.admin.dto;
+package com.grandis.nova.mockapi.control.api;
 
 import com.grandis.nova.mockapi.global.chaos.ConfigSnapshot;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;

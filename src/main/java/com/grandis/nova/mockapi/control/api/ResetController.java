@@ -1,7 +1,6 @@
-package com.grandis.nova.mockapi.admin;
+package com.grandis.nova.mockapi.control.api;
 
-import com.grandis.nova.mockapi.admin.dto.ResetRequest;
-import com.grandis.nova.mockapi.admin.dto.ResetResponse;
+import com.grandis.nova.mockapi.control.application.ResetService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;

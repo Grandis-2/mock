@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.admin.dto;
+package com.grandis.nova.mockapi.control.api;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;

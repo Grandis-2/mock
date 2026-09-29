@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.admin.dto;
+package com.grandis.nova.mockapi.control.api;
 
 /**
  * 초기화 결과.
