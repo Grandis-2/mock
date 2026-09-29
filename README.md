@@ -65,4 +65,6 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | --- | --- |
 | [docs/api.md](docs/api.md) | **API 명세 정본** — 요청 · 응답 · 오류 계약 · 확인 시나리오 |
 | [docs/design.md](docs/design.md) | 처리 순서 · 동시성 · 등록 ↔ 제어 파트 계약 · 시험 방법 |
+| [docs/operations.md](docs/operations.md) | 운영 · 시연 — Mock 조절 · 장애 재현 · 부하 실행 · 결과 확인 |
+| [docs/load-test.md](docs/load-test.md) | 부하 시험 — 판정 기준과 결과 |
 | [docs/schema.sql](docs/schema.sql) | 스키마 정본 |

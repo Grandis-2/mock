@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import org.apache.catalina.connector.ClientAbortException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.MessageSourceResolvable;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -32,9 +34,9 @@ import tools.jackson.databind.exc.UnrecognizedPropertyException;
  * 재시도한다. 그래서 <b>재시도해도 결과가 달라지지 않는 요청은 반드시 여기서 4xx 로 걷어내야 한다.</b>
  * 걷어내지 못하면 잘못된 요청 하나가 워커를 무한 재시도에 묶는다.
  *
- * <p>상태는 명세의 "오류 분류 계약" 다섯 가지만 쓴다. 메서드 오타를 405, Content-Type 오류를 415 로
- * 주는 편이 HTTP 로는 정확하지만, 본 서비스는 상태가 아니라 {@code errorCode} 로 분기하고 이 넷은 모두
- * "계약 오류" 라는 같은 뜻이다. 상태를 늘리는 대신 무엇이 틀렸는지를 메시지에 담는다.
+ * <p>상태는 명세의 "오류 분류 계약" 다섯 가지(400 · 404 · 409 · 422 · 500)만 쓴다. 메서드 오타를 405,
+ * Content-Type 오류를 415 로 주는 편이 HTTP 로는 정확하지만, 본 서비스는 상태가 아니라 {@code errorCode}
+ * 로 분기하고 둘 다 "계약 오류" 라는 같은 뜻이다. 상태를 늘리는 대신 무엇이 틀렸는지를 메시지에 담는다.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -131,6 +133,7 @@ public class GlobalExceptionHandler {
                 .orElse(ErrorCode.INVALID_REQUEST.defaultMessage());
         return badRequest(detail);
     }
+
     /**
      * 없는 경로. 아래 catch-all 로 떨어지면 500 UPSTREAM_UNAVAILABLE 이 되는데,
      * 본 서비스가 그것을 일시 실패로 보고 재시도한다. 경로 오타는 재시도해도 소용없으므로 404 로 준다.
@@ -140,6 +143,23 @@ public class GlobalExceptionHandler {
         ErrorCode code = ErrorCode.NOT_FOUND;
         return ResponseEntity.status(code.status())
                 .body(ErrorResponse.of(code, "그런 경로가 없습니다: " + e.getResourcePath()));
+    }
+
+    /**
+     * 클라이언트가 먼저 끊은 연결에 응답을 쓰다 난 오류. 요청이 틀린 것도 Mock 이 아픈 것도 아니다.
+     *
+     * <p>아래 catch-all 로 떨어지면 "처리하지 못한 오류" 로 찍혀, 부하 시험이 0건이어야 한다고 세는 서버
+     * 버그 로그와 섞인다. 부하 클라이언트를 도중에 강제 종료하면 한 번에 수백 건이 찍혔다. 받을 쪽이
+     * 없으니 응답도 쓰지 않는다 — 쓰려고 하면 같은 예외가 또 난다.
+     *
+     * <p>스프링의 {@code DisconnectedClientHelper} 를 쓰지 않고 두 예외로 좁힌다. 그쪽은
+     * {@code EOFException} 과 "connection reset" 문구가 원인에 있기만 해도 끊긴 클라이언트로 보는데,
+     * MySQL 연결이 끊겨도 같은 것이 원인에 실린다. DB 장애가 여기로 오면 500 대신 빈 응답이 나가
+     * 워커가 일시 실패를 알 수 없다. 이 두 예외는 응답을 주고받는 소켓에서만 난다.
+     */
+    @ExceptionHandler({AsyncRequestNotUsableException.class, ClientAbortException.class})
+    public void handleClientGone(Exception e) {
+        log.debug("클라이언트가 먼저 끊었다 — 응답을 쓰지 않는다: {}", e.getMessage());
     }
 
     /**

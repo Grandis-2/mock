@@ -1,16 +1,25 @@
 package com.grandis.nova.mockapi.global.error;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import jakarta.validation.constraints.Size;
+import java.io.IOException;
 import java.util.Map;
+import org.apache.catalina.connector.ClientAbortException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -21,13 +30,14 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 /**
  * 잘못된 요청이 500 으로 나가지 않는지 본다.
  *
  * <p>Mock 의 500 은 "일시 실패" 라는 뜻이고 본 서비스가 재시도한다. 요청 자체가 틀린 경우는
- * 몇 번을 다시 보내도 결과가 같으므로 4xx 로 나가야 재시도가 멈춘다. 실제 API 컨트롤러는 아직 없어서
- * 여기서만 쓰는 시험용 컨트롤러로 각 예외를 일으킨다.
+ * 몇 번을 다시 보내도 결과가 같으므로 4xx 로 나가야 재시도가 멈춘다. 실제 API 로는 일으키기 어려운
+ * 예외가 많아 여기서만 쓰는 시험용 컨트롤러로 각 예외를 일으킨다.
  */
 // 범위를 시험용 컨트롤러로 좁힌다. 범위 없는 @WebMvcTest 는 컨트롤러를 전부 긁어오므로,
 // 누군가 새 컨트롤러를 만들 때마다 그 컨트롤러가 의존하는 빈이 없다며 이 시험이 깨진다.
@@ -97,12 +107,32 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.externalNumber").value(nullValue()));
     }
 
+    /**
+     * 부하 시험은 서버 로그의 "처리하지 못한 오류" 가 0건인지 센다. 진짜 서버 오류는 이 문구로 남아야 하고,
+     * 아래 끊긴 클라이언트 시험이 "안 찍혔다" 를 볼 때 로그를 제대로 붙잡고 있다는 근거도 된다.
+     */
     @Test
-    @DisplayName("Mock 안에서 터진 오류만 500 UPSTREAM_UNAVAILABLE 이다")
-    void unexpectedStaysServerError() throws Exception {
+    @ExtendWith(OutputCaptureExtension.class)
+    @DisplayName("Mock 안에서 터진 오류만 500 UPSTREAM_UNAVAILABLE 이고 ERROR 로 남는다")
+    void unexpectedStaysServerError(CapturedOutput output) throws Exception {
         mvc.perform(get("/probe/boom"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"));
+        assertThat(output).contains("처리하지 못한 오류");
+    }
+
+    /**
+     * 부하 클라이언트를 도중에 강제 종료하면 응답을 쓰다 이 예외들이 난다(한 번에 수백 건).
+     * catch-all 로 떨어지면 서버 버그와 같은 문구로 찍히고, 끊긴 연결에 500 을 또 쓰려 한다.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"async", "abort"})
+    @ExtendWith(OutputCaptureExtension.class)
+    @DisplayName("끊긴 클라이언트 - ERROR 로 찍지 않고 오류 응답도 쓰지 않는다")
+    void clientGoneIsNotAnError(String kind, CapturedOutput output) throws Exception {
+        mvc.perform(get("/probe/gone/" + kind))
+                .andExpect(content().string(""));
+        assertThat(output).doesNotContain("처리하지 못한 오류");
     }
 
     @RestController
@@ -125,6 +155,17 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/probe/number/{n}")
         String number(@PathVariable int n) {
             return String.valueOf(n);
+        }
+
+        /** 실제 로그에서 본 모양 그대로 — 스프링 예외가 톰캣 예외를 감싸고, 맨 안쪽이 연결 리셋이다. */
+        @GetMapping("/probe/gone/{kind}")
+        String gone(@PathVariable String kind) throws IOException {
+            IOException reset = new IOException("Connection reset by peer");
+            if ("abort".equals(kind)) {
+                throw new ClientAbortException(reset);
+            }
+            throw new AsyncRequestNotUsableException("ServletResponse failed to flushBuffer",
+                    new ClientAbortException(reset));
         }
     }
 
