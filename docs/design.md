@@ -30,8 +30,23 @@ com.grandis.nova.mockapi/
 │   ├── config/     MockProperties (지연 평균·지터·실패율·타임아웃 유지 시간 기본값) · 모르는 필드 거절
 │   └── error/      오류 코드 · 응답 형식 · 예외 핸들러
 ├── registration/   등록 원장 — 등록 · 조회 · 취소 · 멱등 판정 · 채번
-└── admin/          설정 · 결함 주입 · 초기화 API
+│   ├── api/          컨트롤러 · 요청·응답 DTO · 키 길이 검사
+│   ├── application/  처리 순서 · 트랜잭션 경계 — Service · Writer · Reader · 중복 키 재시도
+│   └── domain/       원장 행(엔티티) · 리포지토리 · 채번
+└── control/        Mock 조작 — 설정 · 결함 주입 · 초기화 API
+    ├── api/          컨트롤러 · 요청·응답 DTO
+    └── application/  초기화
 ```
+
+**패키지는 같이 바뀌는 것끼리 묶는다.** `api` 는 [api.md](api.md) 가 바뀔 때, `application` 은 아래 처리
+순서가 바뀔 때, `domain` 은 [schema.sql](schema.sql) 이 바뀔 때 고치는 곳이다. 의존은 `api → application →
+domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 아래층 어디든 쓸 수 있어 응답 DTO 는 엔티티
+(`Registration`)를 직접 읽는다. 거꾸로는 안 되므로 처리 층은 요청 DTO 대신 `RegisterCommand` 를 받는다.
+`control` 에는 자기 테이블이 없어 `domain` 이 없다 — 설정 · 결함 보관소는 등록 파트와의 계약이라
+`global/chaos` 에 있고, 초기화가 지우는 것은 등록 원장이다.
+
+층 밖에서 쓰지 않는 클래스는 package-private 으로 숨긴다(`DuplicateKeyRetry` · `DuplicateKey` ·
+`Identifiers`). 같은 층끼리만 쓰므로 나눠도 숨김이 유지된다.
 
 지연·실패 주입은 **등록 처리 안에서** 부른다. 필터에 두면 조회·취소에도 걸리는데, 과제가 취소를
 "항상 성공" 으로 가정하고 정합성 조회까지 느려지기 때문이다.
@@ -129,6 +144,7 @@ Docker 를 켜고, 결과에서 건너뜀이 0 인지 본다.
 | 고정 키 대신 매번 새 키를 쓴다 | H2 인메모리 DB 는 컨텍스트가 달라도 같은 JVM 에서 공유된다. 다른 클래스가 같은 키로 만든 행이 남아 있다 |
 | 시간대 버그는 DB 에 적힌 글자로 본다 | 앱 안에서는 읽을 때 되돌아가 응답이 멀쩡하다. 시험 JVM 은 `Asia/Seoul` 로 고정해 UTC 기계에서도 잡히게 한다(`build.gradle`) |
 | 응답 유실은 실제 소켓으로 본다 | MockMvc 에는 소켓이 없어 연결 끊기가 500 으로 보인다. 워커가 정말 타임아웃을 겪는지는 `ConnectionDropperE2eTest`(`RANDOM_PORT`)가 본다 |
+| 시험 패키지는 main 과 같게 나누고, package-private 을 단정하는 시험은 그 층에 둔다 | 숨긴 클래스는 같은 패키지에서만 보인다. `RegistrationApiTest` 는 이름과 달리 `registration.application` 에 있다 — 중복 키 재시도(`DuplicateKeyRetry`)를 직접 단정해서다. 앱 전체를 띄우는 시험이라 패키지가 시험 범위를 바꾸지는 않는다 |
 
 ### 구현할 때 알아둘 것
 
