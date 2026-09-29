@@ -75,10 +75,56 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 
 ## 2. 장애 재현
 
-### 2-1. 커밋 후 응답 유실 (결과 불명 만들기) — 확인함
+### 2-1. 결과 불명 만들기 — 커밋 전(`TIMEOUT`) · 커밋 후(결함)
+
+결과 불명은 워커가 응답을 받지 못한 것이다. 만드는 방법이 둘이고, **워커 눈에는 똑같이 "응답 없음" 인데
+DB 는 정반대다.** 이 대조가 멱등 키와 `by-key` 조회가 필요한 이유다.
+
+| | `TIMEOUT` | 결함 |
+| --- | --- | --- |
+| 거는 법 | 실패율 + `failureMode: TIMEOUT` | `POST /external/faults` 로 키 하나 |
+| 발동 | 주사위에 걸린 요청 | 그 키의 새 등록 한 번 |
+| 시점 | **커밋 전** | **커밋 후** |
+| 워커가 보는 것 | 응답 없음 | 응답 없음 |
+| DB | **없음** | **있음** |
+| 같은 키 재요청 | 새 등록 (`Replay: false`) | 재생 (`Replay: true`) |
+
+둘 다 `mock.timeout-hold-ms`(기본 5000ms) 동안 헤더도 보내지 않고 붙잡았다가 끊는다. 워커가 먼저
+포기해야 결과 불명이 된다.
+
+> 워커 읽기 타임아웃보다 유지 시간이 **짧으면** 워커가 타임아웃 대신 500 을 받아 "일시 실패" 로
+> 처리한다. 재현하려던 상황이 아니다. 명세가 "워커 타임아웃 + 2초" 로 정한 이유다.
+
+#### 커밋 전 응답 없음 (`TIMEOUT`) — 확인함 (2026-09-29)
+
+실패율을 1.0 으로 올려 매번 걸리게 한다. 5% 로 두면 원하는 순간에 재현되지 않는다.
+
+```bash
+curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
+  -d '{"registerLatencyMs":0,"failureRate":1.0,"failureMode":"TIMEOUT"}'
+
+curl --max-time 3 -X POST localhost:8081/external/reservations \
+  -H 'Idempotency-Key: demo-timeout-1' -H 'Content-Type: application/json' \
+  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'
+
+curl -i localhost:8081/external/reservations/by-key/demo-timeout-1
+```
+
+`--max-time 3` 은 워커 읽기 타임아웃(3초 가정)을 흉내 낸 것이다.
+
+| 확인할 것 | 결과 |
+| --- | --- |
+| 응답 | **없음** — 3.0초에 클라이언트가 포기 |
+| `by-key` 조회 | **404** `NOT_FOUND` — 등록되지 않았다 |
+| DB | **0행** |
+| 실패율 0 으로 되돌리고 같은 키 재요청 | **201 · `X-Idempotent-Replay: false`** — 저장된 게 없으니 새 등록 |
+
+**되돌리는 것을 잊지 않는다.** 실패율 1.0 · `TIMEOUT` 이 남아 있으면 다음 등록이 전부 5초씩 붙잡힌다.
+
+#### 커밋 후 응답 유실 (결함) — 확인함
 
 지연·실패율로는 이 상황을 만들 수 없다. **주입한 실패는 모두 커밋 전이라 등록이 저장되지 않는다.**
-결과 불명을 만들 수 있는 유일한 수단이 결함 주입이다.
+"DB 에는 있는데 응답이 없는" 결과 불명을 만들 수 있는 유일한 수단이 결함 주입이다.
 
 ```bash
 curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
@@ -97,11 +143,9 @@ curl -X POST localhost:8081/external/reservations \
 | 확인할 것 | 결과 |
 | --- | --- |
 | 응답 | 없음. 워커의 읽기 타임아웃이 유지 시간보다 짧아야 타임아웃으로 보인다 |
+| `by-key` 조회 | **200** · `ACTIVE` · `storedOutcome: SUCCESS` (2026-09-29 재확인) |
 | DB | **등록돼 있다.** 커밋은 됐고 응답만 유실된 상태 |
 | 같은 키 재요청 | **201 재생**, 같은 번호, `X-Idempotent-Replay: true`. 결함은 자동 해제됨 |
-
-> 워커 읽기 타임아웃보다 유지 시간이 **짧으면** 워커가 타임아웃 대신 500 을 받아 "일시 실패" 로
-> 처리한다. 재현하려던 상황이 아니다. 명세가 "워커 타임아웃 + 2초" 로 정한 이유다.
 
 ### 2-2. 처리 중 강제 종료 · 재기동 — 확인함 (2026-09-27)
 
@@ -284,7 +328,7 @@ docker exec nova-mock-mysql mysql -unova -pnova -N \
 | 2 | 멱등 재생 | 같은 키 재요청 → 같은 번호 + 재생 헤더 | 절차 확인함 |
 | 3 | 같은 키 다른 내용 | 422 `KEY_PAYLOAD_MISMATCH` → 기존 등록 그대로 | 절차 확인함 |
 | 4 | 일시 실패와 재시도 | 실패율 1.0 → 500 → 키 조회 404 → 0.0 → 즉시 성공 | 절차 확인함 |
-| 5 | **결과 불명 재현** | 결함 주입 → 응답 없음 → DB 에는 있음 → 재요청 재생 | 절차 확인함 (2-1) |
+| 5 | **결과 불명 재현 — 두 가지** | `TIMEOUT` → 응답 없음 → 키 조회 404 · 재요청 새 등록 / 결함 → 응답 없음 → 키 조회 200 · 재요청 재생 | 절차 확인함 (2-1) |
 | 6 | **커밋 직후 중단·재기동** | 결함이 붙잡은 창에서 강제 종료 → DB 확인 → 재기동 → 재생 | 절차 확인함 (2-3) |
 | 7 | **재기동 후 설정 재입력** | 6번 뒤 `configVersion` 0 확인 → 프리셋 다시 넣기 | 필수 |
 | 8 | 부하 | 10초 5,000건 → 5분류 집계 → DB 대조 | 판정 통과 ([load-test.md](load-test.md)) |
