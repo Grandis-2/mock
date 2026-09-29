@@ -37,7 +37,7 @@ public class MockConfigStore implements ConfigProvider {
     }
 
     /**
-     * 등록 시도 하나가 시작할 때 A 가 부른다.
+     * 등록 시도 하나가 시작할 때 등록 파트가 부른다.
      *
      * <p>받아간 스냅샷은 record 라 불변이다. 처리 도중 설정이 바뀌어도 그 시도는 이 값으로 끝난다.
      */

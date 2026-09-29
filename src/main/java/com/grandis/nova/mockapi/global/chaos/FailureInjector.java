@@ -6,7 +6,7 @@ package com.grandis.nova.mockapi.global.chaos;
  * <p><strong>트랜잭션 밖에서</strong> 부른다. 트랜잭션 안에서 기다리면 DB 커넥션이 그만큼 묶여
  * 풀이 마른다. 실패는 커밋 전이라 아무것도 저장되지 않는다.
  *
- * <p>구현은 제어 파트(NV-6)가 맡는다.
+ * <p>구현은 제어 파트가 맡는다.
  */
 public interface FailureInjector {
 

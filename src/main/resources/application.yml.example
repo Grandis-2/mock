@@ -40,7 +40,9 @@ spring:
 server:
   port: 8081
   tomcat:
-    # failureMode=TIMEOUT 은 응답하지 않고 연결을 붙잡는다. 부하 시험에서 연결이 쌓인다.
+    # 톰캣 기본값과 같다 — 올린 값이 아니라 한도를 보이려고 적어 둔다.
+    # failureMode=TIMEOUT 과 응답 유실 결함은 응답하지 않고 연결을 붙잡는다. 붙잡는 연결이 이걸 넘으면
+    # 새 연결은 받아지지 않고 기다리다 거절된다.
     max-connections: 8192
 
 # 지연·실패 설정의 기본값. 실행 중에는 PUT /external/config 로 바꾸고,

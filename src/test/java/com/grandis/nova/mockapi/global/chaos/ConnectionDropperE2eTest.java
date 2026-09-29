@@ -86,7 +86,7 @@ class ConnectionDropperE2eTest {
                 .satisfies(e -> assertThat(((HttpServerErrorException) e).getStatusCode().value()).isEqualTo(500));
     }
 
-    /** A 파트 등록 처리의 시작 부분과 같은 순서로 부른다. */
+    /** 등록 파트가 처리를 시작할 때와 같은 순서로 부른다. */
     @RestController
     static class InjectProbeController {
 

@@ -15,8 +15,8 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 지연·실패 주입.
  *
  * <p>{@code TIMEOUT} 모드는 실제 서블릿 응답이 있어야 하므로 여기서 다루지 않는다. 가짜 응답으로는
- * "정말 아무것도 안 나갔는지" 를 증명할 수 없다. 등록 API 가 올라온 뒤 통합 시험(NV-19)에서
- * 워커가 UNKNOWN 을 겪고 by-key 로 확인하는 시나리오로 본다.
+ * "정말 아무것도 안 나갔는지" 를 증명할 수 없다. 실제 소켓으로 보는 {@link ConnectionDropperE2eTest}
+ * 가 맡는다.
  */
 @SpringBootTest
 class DefaultFailureInjectorTest {

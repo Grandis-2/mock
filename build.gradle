@@ -59,10 +59,10 @@ tasks.named('test') {
 //   JDBC      생략하면 localhost:3307. **다른 장비에서 쏠 때는 반드시 Mock 장비 주소로 넣는다**
 //             안 넣으면 원장이 비어 보여 키 대조가 전부 실패로 찍힌다
 //
-// 장비를 나눠 돌릴 때 (합의 조건 1번):
-//   A 쪽   ./gradlew bootRun
-//   내 쪽  ./gradlew loadTest --args="http://A_IP:8081 baseline classify 5000 \
-//                                     jdbc:mysql://A_IP:3307/external_mock?serverTimezone=UTC"
+// 장비를 나눠 돌릴 때 (docs/load-test.md 합의 조건 1번):
+//   Mock 장비   ./gradlew bootRun
+//   부하 장비   ./gradlew loadTest --args="http://MOCK_IP:8081 baseline classify 5000 \
+//                                          jdbc:mysql://MOCK_IP:3307/external_mock?serverTimezone=UTC"
 //
 // 판정 순서 — 시나리오 × 패스 조합(5개)마다:
 //   그 조합으로 예열 1회(버림) → [POST /external/reset → 판정] × 3회
