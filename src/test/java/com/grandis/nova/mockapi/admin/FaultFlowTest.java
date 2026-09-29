@@ -8,8 +8,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
-import com.grandis.nova.mockapi.registration.Registration;
-import com.grandis.nova.mockapi.registration.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.domain.Registration;
+import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

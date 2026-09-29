@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.application;
 
 import java.sql.SQLException;
 import org.springframework.dao.DuplicateKeyException;

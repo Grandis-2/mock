@@ -1,9 +1,8 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.api;
 
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
-import com.grandis.nova.mockapi.registration.dto.CancelRequest;
-import com.grandis.nova.mockapi.registration.dto.CancelResponse;
+import com.grandis.nova.mockapi.registration.application.CancellationService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;

@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.domain;
 
 import java.time.Instant;
 import java.time.ZoneOffset;

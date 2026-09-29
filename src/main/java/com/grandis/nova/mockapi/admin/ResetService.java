@@ -1,7 +1,7 @@
 package com.grandis.nova.mockapi.admin;
 
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
-import com.grandis.nova.mockapi.registration.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 

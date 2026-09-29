@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -11,7 +11,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
-import com.grandis.nova.mockapi.registration.dto.RegisterRequest;
+import com.grandis.nova.mockapi.registration.api.RegisterRequest;
+import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
+import com.grandis.nova.mockapi.registration.domain.Registration;
+import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;

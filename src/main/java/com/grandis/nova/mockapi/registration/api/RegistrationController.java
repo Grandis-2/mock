@@ -1,8 +1,8 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.api;
 
-import com.grandis.nova.mockapi.registration.dto.KeyStatusResponse;
-import com.grandis.nova.mockapi.registration.dto.RegisterRequest;
-import com.grandis.nova.mockapi.registration.dto.RegistrationResponse;
+import com.grandis.nova.mockapi.registration.application.RegisterResult;
+import com.grandis.nova.mockapi.registration.application.RegistrationReader;
+import com.grandis.nova.mockapi.registration.application.RegistrationService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

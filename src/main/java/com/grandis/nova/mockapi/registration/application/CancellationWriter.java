@@ -1,7 +1,9 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.application;
 
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
+import com.grandis.nova.mockapi.registration.domain.Registration;
+import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;

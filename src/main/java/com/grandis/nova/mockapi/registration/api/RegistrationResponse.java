@@ -1,7 +1,7 @@
-package com.grandis.nova.mockapi.registration.dto;
+package com.grandis.nova.mockapi.registration.api;
 
-import com.grandis.nova.mockapi.registration.Registration;
-import com.grandis.nova.mockapi.registration.RegistrationStatus;
+import com.grandis.nova.mockapi.registration.domain.Registration;
+import com.grandis.nova.mockapi.registration.domain.RegistrationStatus;
 import java.time.Instant;
 
 /**

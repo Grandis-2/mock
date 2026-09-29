@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
+import com.grandis.nova.mockapi.registration.domain.Registration;
+import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -28,7 +30,7 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * 번호 조회 · 키 조회 API. 명세 v5 의 응답 형식과 세 가지 행 상태별 응답을 HTTP 로 본다.
  *
- * <p>키 조회가 커밋 전 등록을 기다리는지는 H2 로 볼 수 없다. {@link RegistrationConcurrencyTest} 가
+ * <p>키 조회가 커밋 전 등록을 기다리는지는 H2 로 볼 수 없다. {@code RegistrationConcurrencyTest} 가
  * 진짜 MySQL 로 본다.
  */
 @SpringBootTest

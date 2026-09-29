@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

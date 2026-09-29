@@ -1,12 +1,12 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.application;
 
 import com.grandis.nova.mockapi.global.chaos.ConfigProvider;
 import com.grandis.nova.mockapi.global.chaos.ConfigSnapshot;
 import com.grandis.nova.mockapi.global.chaos.ConnectionDropper;
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.chaos.FaultHook;
-import com.grandis.nova.mockapi.registration.RegistrationWriter.Attempt;
-import com.grandis.nova.mockapi.registration.dto.RegisterRequest;
+import com.grandis.nova.mockapi.registration.api.RegisterRequest;
+import com.grandis.nova.mockapi.registration.application.RegistrationWriter.Attempt;
 import org.springframework.stereotype.Service;
 
 /**

@@ -1,7 +1,7 @@
-package com.grandis.nova.mockapi.registration.dto;
+package com.grandis.nova.mockapi.registration.api;
 
-import com.grandis.nova.mockapi.registration.CancelResult;
-import com.grandis.nova.mockapi.registration.Registration;
+import com.grandis.nova.mockapi.registration.application.CancelResult;
+import com.grandis.nova.mockapi.registration.domain.Registration;
 import java.time.Instant;
 import java.util.List;
 

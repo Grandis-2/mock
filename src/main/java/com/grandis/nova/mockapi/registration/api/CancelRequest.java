@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration.dto;
+package com.grandis.nova.mockapi.registration.api;
 
 /**
  * 예약 취소 요청. 키와 번호 중 하나 이상이 있어야 한다.

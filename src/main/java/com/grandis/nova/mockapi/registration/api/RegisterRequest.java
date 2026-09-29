@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration.dto;
+package com.grandis.nova.mockapi.registration.api;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

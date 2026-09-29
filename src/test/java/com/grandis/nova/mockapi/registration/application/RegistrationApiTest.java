@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -23,6 +23,9 @@ import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
+import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
+import com.grandis.nova.mockapi.registration.domain.Registration;
+import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;

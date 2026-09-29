@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.api;
 
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;

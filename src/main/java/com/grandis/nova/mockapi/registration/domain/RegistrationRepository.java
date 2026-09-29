@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.domain;
 
 import jakarta.persistence.LockModeType;
 import java.util.Optional;

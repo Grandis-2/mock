@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
+import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,7 +29,7 @@ import tools.jackson.databind.json.JsonMapper;
  * 예약 취소 API. 명세 v5 의 확인 시나리오와 요청 검증을 HTTP 로 본다.
  *
  * <p>H2 라 순서대로 부를 때의 판정만 본다. 등록과 취소가 동시에 들어오는 경합은
- * {@link RegistrationConcurrencyTest} 가 진짜 MySQL 로 본다.
+ * {@code RegistrationConcurrencyTest} 가 진짜 MySQL 로 본다.
  */
 @SpringBootTest
 @AutoConfigureMockMvc

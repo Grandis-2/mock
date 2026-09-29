@@ -1,4 +1,6 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.application;
+
+import com.grandis.nova.mockapi.registration.domain.Registration;
 
 /**
  * 취소 처리 결과.

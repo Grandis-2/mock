@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration;
+package com.grandis.nova.mockapi.registration.domain;
 
 /**
  * 등록 행의 상태. DB 의 {@code ck_registration_status} 가 이 둘만 허용한다.
