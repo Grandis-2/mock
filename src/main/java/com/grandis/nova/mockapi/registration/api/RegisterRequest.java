@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.registration.api;
 
+import com.grandis.nova.mockapi.registration.application.RegisterCommand;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -26,4 +27,9 @@ public record RegisterRequest(
         @Size(max = 80, message = "은(는) 80자 이하여야 합니다.")
         String sku
 ) {
+
+    /** 검증을 통과한 요청을 처리 층의 신청 내용으로 바꾼다. */
+    public RegisterCommand toCommand() {
+        return new RegisterCommand(customerId, productId, sku);
+    }
 }

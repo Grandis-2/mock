@@ -5,7 +5,6 @@ import com.grandis.nova.mockapi.global.chaos.ConfigSnapshot;
 import com.grandis.nova.mockapi.global.chaos.ConnectionDropper;
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.chaos.FaultHook;
-import com.grandis.nova.mockapi.registration.api.RegisterRequest;
 import com.grandis.nova.mockapi.registration.application.RegistrationWriter.Attempt;
 import org.springframework.stereotype.Service;
 
@@ -41,14 +40,14 @@ public class RegistrationService {
         this.connectionDropper = connectionDropper;
     }
 
-    public RegisterResult register(String key, RegisterRequest request) {
+    public RegisterResult register(String key, RegisterCommand command) {
         // 1~2. 이 시도가 쓸 설정을 먼저 얼린다. 처리 도중 설정이 바뀌어도 이 값으로 끝난다.
         // 실패는 커밋 전이라 아무것도 저장되지 않는다. TIMEOUT 이면 여기서 응답 없이 끝난다.
         ConfigSnapshot snapshot = configProvider.snapshot();
         failureInjector.apply(snapshot);
 
         // 3~6. 중복 키면 트랜잭션을 나와 3단계부터 다시
-        Attempt attempt = DuplicateKeyRetry.run(key, () -> writer.attemptOnce(key, request));
+        Attempt attempt = DuplicateKeyRetry.run(key, () -> writer.attemptOnce(key, command));
 
         // 7. 새로 커밋한 경우에만 발동한다. 재생은 커밋이 없어 "커밋 후 응답 유실" 이 아니다.
         if (!attempt.replayed() && faultHook.consumeResponseLost(key)) {

@@ -11,7 +11,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
-import com.grandis.nova.mockapi.registration.api.RegisterRequest;
 import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
@@ -77,7 +76,7 @@ class RegistrationConcurrencyTest {
                     "--character-set-server=utf8mb4",
                     "--collation-server=utf8mb4_0900_ai_ci");
 
-    private static final RegisterRequest REQUEST = new RegisterRequest(1001L, 12L, "SM-G999-256-BLK");
+    private static final RegisterCommand COMMAND = new RegisterCommand(1001L, 12L, "SM-G999-256-BLK");
 
     /** 동시성 버그는 경합에서만 나온다. 한 번 통과는 증명이 아니다(명세: 최소 100회). */
     private static final int ROUNDS = 100;
@@ -153,7 +152,7 @@ class RegistrationConcurrencyTest {
             for (int i = 0; i < CONCURRENT; i++) {
                 futures.add(pool.submit(() -> {
                     start.await();
-                    return service.register(key, REQUEST);
+                    return service.register(key, COMMAND);
                 }));
             }
             start.countDown();
@@ -178,7 +177,7 @@ class RegistrationConcurrencyTest {
                 .as("시험 JVM 이 UTC 면 이 시험은 아무것도 증명하지 못한다 — build.gradle 의 user.timezone 확인")
                 .isNotEqualTo(ZoneOffset.UTC);
 
-        Registration saved = service.register(UUID.randomUUID().toString(), REQUEST).registration();
+        Registration saved = service.register(UUID.randomUUID().toString(), COMMAND).registration();
 
         String stored = jdbc.queryForObject(
                 "SELECT CAST(confirmed_at AS CHAR) FROM preorder_registrations WHERE external_key = ?",
@@ -194,9 +193,9 @@ class RegistrationConcurrencyTest {
                 .doReturn("R-19990101-0000000002")
                 .when(numbers).next(any());
 
-        assertThat(service.register(UUID.randomUUID().toString(), REQUEST).registration().externalNumber())
+        assertThat(service.register(UUID.randomUUID().toString(), COMMAND).registration().externalNumber())
                 .isEqualTo("R-19990101-0000000001");
-        assertThat(service.register(UUID.randomUUID().toString(), REQUEST).registration().externalNumber())
+        assertThat(service.register(UUID.randomUUID().toString(), COMMAND).registration().externalNumber())
                 .isEqualTo("R-19990101-0000000002");
     }
 
@@ -256,7 +255,7 @@ class RegistrationConcurrencyTest {
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             try {
                 Future<?> registration = pool.submit(() -> tx.executeWithoutResult(status -> {
-                    writer.attemptOnce(key, REQUEST);   // 등록과 같은 경로로 INSERT 까지 간다
+                    writer.attemptOnce(key, COMMAND);   // 등록과 같은 경로로 INSERT 까지 간다
                     inserted.countDown();
                     awaitQuietly(release);
                     if (!commit) {
@@ -297,7 +296,7 @@ class RegistrationConcurrencyTest {
     @DisplayName("키 조회는 대소문자를 구별한다")
     void byKeyIsCaseSensitive() throws Exception {
         String key = "Key-" + UUID.randomUUID();
-        service.register(key, REQUEST);
+        service.register(key, COMMAND);
 
         assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key.toUpperCase()))
                 .andReturn().getResponse().getStatus()).isEqualTo(404);
@@ -326,7 +325,7 @@ class RegistrationConcurrencyTest {
 
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             try {
-                Future<RegisterResult> registration = pool.submit(() -> service.register(key, REQUEST));
+                Future<RegisterResult> registration = pool.submit(() -> service.register(key, COMMAND));
                 assertThat(inLatency.await(10, TimeUnit.SECONDS)).isTrue();
 
                 // 등록이 지연 중이어도 취소는 잠금을 기다리지 않는다
@@ -369,7 +368,7 @@ class RegistrationConcurrencyTest {
                 for (int i = 0; i < CONCURRENT / 2; i++) {
                     registrations.add(pool.submit(() -> {
                         start.await();
-                        return service.register(key, REQUEST);
+                        return service.register(key, COMMAND);
                     }));
                     cancels.add(pool.submit(() -> {
                         start.await();

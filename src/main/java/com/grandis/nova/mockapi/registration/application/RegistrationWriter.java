@@ -2,7 +2,6 @@ package com.grandis.nova.mockapi.registration.application;
 
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
-import com.grandis.nova.mockapi.registration.api.RegisterRequest;
 import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
@@ -36,11 +35,11 @@ public class RegistrationWriter {
      * @throws org.springframework.dao.DataIntegrityViolationException 중복 키. 바깥에서 새 트랜잭션으로 다시 부른다
      */
     @Transactional
-    public Attempt attemptOnce(String key, RegisterRequest request) {
+    public Attempt attemptOnce(String key, RegisterCommand command) {
         // 3. 키 행을 잠그고 읽는다. 행이 없으면 잠금이 걸리지 않는다(READ COMMITTED 에는 갭 락이 없다).
         var existing = repository.findByKeyForUpdate(key);
         if (existing.isPresent()) {
-            return judgeExisting(existing.get(), request);
+            return judgeExisting(existing.get(), command);
         }
 
         // 6. 새로 만든다. 번호는 시도마다 새로 뽑는다 — 번호가 겹쳐 재시도할 때 같은 번호면 또 부딪힌다.
@@ -48,14 +47,14 @@ public class RegistrationWriter {
         Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
         Registration created = Registration.active(
                 key, numbers.next(now),
-                request.customerId(), request.productId(), request.sku(),
+                command.customerId(), command.productId(), command.sku(),
                 now);
         // 여기서 INSERT 를 내보낸다. 중복 키가 커밋 시점이 아니라 이 줄에서 나야 원인이 분명하다.
         repository.saveAndFlush(created);
         return new Attempt(created, false);
     }
 
-    private Attempt judgeExisting(Registration registration, RegisterRequest request) {
+    private Attempt judgeExisting(Registration registration, RegisterCommand command) {
         // 4. 취소 표식이 재생보다 먼저다. 순서가 반대면 "등록 → 취소 → 재등록" 이 201 로 재생된다.
         if (registration.isCanceled()) {
             throw new MockException(ErrorCode.KEY_CANCELED,
@@ -64,7 +63,7 @@ public class RegistrationWriter {
 
         // 5. 같은 신청이면 저장된 결과를 재생하고, 아니면 기존 등록을 건드리지 않고 거절한다.
         List<String> differing = registration.differingFields(
-                request.customerId(), request.productId(), request.sku());
+                command.customerId(), command.productId(), command.sku());
         if (!differing.isEmpty()) {
             throw new MockException(ErrorCode.KEY_PAYLOAD_MISMATCH,
                     "같은 키로 다른 내용이 요청되었습니다. " + String.join(", ", differing) + " 이(가) 다릅니다.",

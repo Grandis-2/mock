@@ -37,7 +37,7 @@ public class RegistrationController {
             @Valid @RequestBody RegisterRequest request) {
         Identifiers.requireLength(IDEMPOTENCY_KEY, key);
 
-        RegisterResult result = service.register(key, request);
+        RegisterResult result = service.register(key, request.toCommand());
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(IDEMPOTENT_REPLAY, String.valueOf(result.replayed()))
