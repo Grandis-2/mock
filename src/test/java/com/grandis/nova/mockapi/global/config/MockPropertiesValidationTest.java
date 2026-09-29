@@ -62,7 +62,7 @@ class MockPropertiesValidationTest {
                         .rootCause().hasMessageContaining("latencyJitter"));
     }
 
-    /** 유지 시간 0 은 "붙잡지 않고 바로 끊는다" 로 시험이 쓰는 값이다. */
+    /** 유지 시간 0 은 시험 전용 값이다 — 붙잡지 않고 바로 빈 500 으로 끝낸다. */
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {
             "mock.register-latency-ms=0", "mock.register-latency-ms=60000",
