@@ -3,7 +3,7 @@
 요구사항 8장이 요구하는 산출물이다. **Mock 조절 · 장애 재현 · 부하 실행 · 결과 확인** 네 가지를
 넘겨받는 사람이 그대로 따라 할 수 있게 적는다.
 
-> **작성 중.** 아래 절차 중 확인 표시가 있는 것은 실제로 수행해 본 것이고, 나머지는 아직이다.
+> 절차 제목의 **확인함** 은 실제로 따라 해 본 것이다. 결과 표의 숫자는 그때 받은 값이다.
 
 ## 0. 준비
 
@@ -276,20 +276,90 @@ docker exec nova-mock-mysql mysql -unova -pnova -N \
 
 ---
 
-## 시연 대본 (뼈대 — 작성 중)
+## 시연 대본
 
 | 순서 | 보여줄 것 | 조작 | 상태 |
 | --- | --- | --- | --- |
-| 1 | 정상 등록 | 기본 프리셋으로 등록 1건 | 뼈대 |
-| 2 | 멱등 재생 | 같은 키 재요청 → 같은 번호 + 재생 헤더 | 뼈대 |
-| 3 | 같은 키 다른 내용 | 422 `KEY_PAYLOAD_MISMATCH` | 뼈대 |
-| 4 | 일시 실패와 재시도 | 실패율 1.0 → 0.0 → 즉시 성공 | 뼈대 |
-| 5 | **결과 불명 재현** | 결함 주입 → 응답 없음 → DB 에는 있음 → 재요청 재생 | 절차 확인함 |
-| 6 | **커밋 직후 중단·재기동** | 결함이 붙잡은 창에서 강제 종료 → DB 확인 → 재기동 → 재생 | 절차 확인함 |
+| 1 | 정상 등록 | 지연 500 · 실패율 0 으로 등록 1건 | 절차 확인함 |
+| 2 | 멱등 재생 | 같은 키 재요청 → 같은 번호 + 재생 헤더 | 절차 확인함 |
+| 3 | 같은 키 다른 내용 | 422 `KEY_PAYLOAD_MISMATCH` → 기존 등록 그대로 | 절차 확인함 |
+| 4 | 일시 실패와 재시도 | 실패율 1.0 → 500 → 키 조회 404 → 0.0 → 즉시 성공 | 절차 확인함 |
+| 5 | **결과 불명 재현** | 결함 주입 → 응답 없음 → DB 에는 있음 → 재요청 재생 | 절차 확인함 (2-1) |
+| 6 | **커밋 직후 중단·재기동** | 결함이 붙잡은 창에서 강제 종료 → DB 확인 → 재기동 → 재생 | 절차 확인함 (2-3) |
 | 7 | **재기동 후 설정 재입력** | 6번 뒤 `configVersion` 0 확인 → 프리셋 다시 넣기 | 필수 |
-| 8 | 부하 | 10초 5,000건 → 5분류 집계 → DB 대조 | 조건 합의 후 |
+| 8 | 부하 | 10초 5,000건 → 5분류 집계 → DB 대조 | 판정 통과 ([load-test.md](load-test.md)) |
 
 > 7번을 빼먹으면 그다음 시연이 기본값(500ms · 5%)으로 돌아간 상태에서 진행된다.
+
+### 1~4. 등록 기본 흐름 — 확인함 (2026-09-29)
+
+키 하나로 이어서 보여준다. 키는 읽기 쉬운 문자열을 쓴다 — 실제 워커는 `preorder_token`(UUID)을 보내지만
+Mock 은 1~100자만 본다.
+
+**준비** — 기록을 비우고 **실패율을 0 으로** 둔다. 기본 5% 로 두면 1~3번 세 요청 중 한 번이라도 500 이 날
+확률이 약 14% 라 흐름이 끊긴다. 지연은 500ms 그대로 둬 응답이 0.5초 안팎 걸리는 게 보이게 한다.
+
+```bash
+curl -X POST localhost:8081/external/reset -H 'Content-Type: application/json' -d '{"confirm":"RESET"}'
+curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
+  -d '{"registerLatencyMs":500,"failureRate":0.0}'
+```
+
+**1. 정상 등록**
+
+```bash
+curl -i -X POST localhost:8081/external/reservations \
+  -H 'Idempotency-Key: demo-1' -H 'Content-Type: application/json' \
+  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'
+```
+
+**2. 멱등 재생** — 1번과 **똑같은 요청**을 한 번 더 보낸다. 이어서 키로 조회한다.
+
+```bash
+curl localhost:8081/external/reservations/by-key/demo-1
+```
+
+**3. 같은 키 다른 내용** — 키는 그대로 두고 `sku` 만 `SM-G999-512-BLK` 로 바꿔 보낸다. 이어서 1번에서 받은
+번호로 조회해 기존 등록이 그대로인지 본다.
+
+```bash
+curl localhost:8081/external/reservations/<1번의 externalNumber>
+```
+
+**4. 일시 실패와 재시도** — 실패율을 1.0 으로 올리고 **새 키** `demo-2` 로 등록한다. 500 을 받은 뒤 키로
+조회해 저장되지 않은 것을 보이고, 실패율을 0 으로 내려 같은 요청을 다시 보낸다.
+
+```bash
+curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
+  -d '{"registerLatencyMs":500,"failureRate":1.0}'
+curl -i -X POST localhost:8081/external/reservations \
+  -H 'Idempotency-Key: demo-2' -H 'Content-Type: application/json' \
+  -d '{"customerId":1002,"productId":12,"sku":"SM-G999-256-BLK"}'
+curl -i localhost:8081/external/reservations/by-key/demo-2
+curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
+  -d '{"registerLatencyMs":500,"failureRate":0.0}'
+# 위의 등록 요청(demo-2)을 그대로 다시 보낸다
+```
+
+수행 결과:
+
+| 순서 | 보여줄 것 | 결과 |
+| --- | --- | --- |
+| 1 | 201 · 번호 발급 | **201** · `X-Idempotent-Replay: false` · `R-20260929-8855269550` · `ACTIVE` · 0.75초. DB 1행 |
+| 2 | 같은 번호 · 재생 헤더 | **201** · `X-Idempotent-Replay: true` · **같은 번호 · 같은 `confirmedAt`** · 0.57초. 키 조회 `storedOutcome: SUCCESS`. DB 여전히 1행 |
+| 3 | 422 · 기존 등록 보존 | **422 `KEY_PAYLOAD_MISMATCH`** · "sku 이(가) 다릅니다" · `externalNumber` 에 기존 번호. 번호 조회의 `sku` 는 `256-BLK` 그대로 |
+| 4 | 실패는 저장되지 않는다 | **500 `UPSTREAM_UNAVAILABLE`**(`replayable: false`) → 키 조회 **404** → 0.0 으로 내리고 재시도 **201 · `X-Idempotent-Replay: false`** · 새 번호. DB 2행 |
+
+**말로 짚을 것**
+
+- **2번** — 재생도 201 이다. 워커는 상태가 아니라 `X-Idempotent-Replay` 로 새 등록과 재생을 가른다
+- **3번** — 422 는 본 서비스 버그라는 신호라 워커가 재시도하지 않는다. 응답에 기존 번호가 실려 무엇과 부딪혔는지 안다
+- **4번** — **실패를 저장하지 않았기 때문에** 실패율을 내리자마자 같은 키가 성공한다. 저장했다면 500 이 영원히
+  재생된다. 재시도가 재생(`true`)이 아니라 새 등록(`false`)인 것이 그 증거다
+- **4번의 404** — 5xx 는 미등록의 증거가 아니라서 워커는 다시 보내기 전에 키 조회로 확인한다. 키 조회는 진행 중인
+  등록을 기다린 뒤 답하므로 404 가 "등록 안 됨" 의 확정 근거다
+
+4번이 끝나면 지연 500 · 실패율 0 상태다. 5번은 2-1 절차대로 지연까지 0 으로 다시 넣는다.
 
 ## 예상 질문
 
