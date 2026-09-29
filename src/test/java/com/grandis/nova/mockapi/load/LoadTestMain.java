@@ -78,6 +78,11 @@ public final class LoadTestMain {
         InjectedLatency injected = new InjectedLatency(
                 readNumber(configBody, "registerLatencyMs"),
                 readDecimal(configBody, "latencyJitter", 0.0));
+        // TIMEOUT 모드에서 주사위에 걸린 요청은 Mock 이 응답 없이 붙잡는다. 그만큼은 클라이언트가
+        // 포기할 때까지 떠 있으므로 동시 요청 상한을 계산할 때 따로 센다.
+        double heldFraction = configBody.contains("\"failureMode\":\"TIMEOUT\"")
+                ? readDecimal(configBody, "failureRate", 0.0)
+                : 0.0;
 
         LoadPlan plan = switch (pass) {
             case "classify" -> LoadPlan.classify(baseUrl, requests);
@@ -106,7 +111,7 @@ public final class LoadTestMain {
         RegistrationSnapshot db = RegistrationSnapshot.take(jdbcUrl, dbUser, dbPassword);
 
         String report = runner.report()
-                .render(plan, configBody, configVersion, injected,
+                .render(plan, configBody, configVersion, injected, heldFraction,
                         runner.maxInFlight(), runner.maxLaunchLag(), elapsed, db);
         System.out.println();
         System.out.println(report);

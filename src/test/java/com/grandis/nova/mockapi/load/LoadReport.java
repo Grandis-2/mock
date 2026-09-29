@@ -204,12 +204,13 @@ public final class LoadReport {
      * @param configVersion 이 실행에 적용된 Mock 설정 버전 (요구사항 5.4)
      * @param configBody    같은 목적. 지연·실패율을 그대로 남긴다
      * @param injected      Mock 이 일부러 넣은 지연의 분포. 오버헤드는 관측값에서 이것의 같은 백분위를 뺀다
+     * @param heldFraction  Mock 이 응답 없이 붙잡는 요청의 비율. 동시 요청 상한을 계산하는 데 쓴다
      * @param maxInFlight   동시에 떠 있던 요청의 최대치. 서버 쪽 커넥션 수의 대용값이다
      * @param elapsed       첫 발사부터 마지막 응답까지
      */
     public String render(LoadPlan plan, String configBody, int configVersion,
-                         InjectedLatency injected, int maxInFlight, Duration launchLag, Duration elapsed,
-                         RegistrationSnapshot db) {
+                         InjectedLatency injected, double heldFraction, int maxInFlight,
+                         Duration launchLag, Duration elapsed, RegistrationSnapshot db) {
         Map<Outcome, Integer> counts = byOutcome();
         StringBuilder out = new StringBuilder();
 
@@ -316,7 +317,7 @@ public final class LoadReport {
         out.append("| **미완료(결과 불명)** | ").append(counts.get(Outcome.UNKNOWN))
                 .append("건 | — | — | — | 위 대조 참고 |\n");
         out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | — | ")
-                .append(expectedInFlight(plan, injected.meanMs()))
+                .append(expectedInFlight(plan, injected.meanMs(), heldFraction))
                 .append(" | 넘으면 어딘가에서 대기가 쌓였다 |\n");
         out.append("| 전체 소요 | ").append(elapsed.toMillis()).append("ms | — | — | — | — |\n\n");
 
@@ -357,20 +358,34 @@ public final class LoadReport {
     }
 
     /**
-     * 동시에 떠 있을 요청 수의 상한. {@code RPS × (설정 지연 + 허용 오버헤드)} 다.
+     * 동시에 떠 있을 요청 수의 상한. {@code RPS × 한 건이 떠 있는 시간} 이다.
+     *
+     * <p>한 건이 떠 있는 시간은 두 경우로 갈린다.
+     * <ul>
+     *   <li>Mock 이 답하는 요청 — {@code 설정 지연 + 허용 오버헤드}
+     *   <li>Mock 이 <b>일부러 붙잡는</b> 요청({@code TIMEOUT} 모드에서 주사위에 걸린 것) — 클라이언트가
+     *       포기할 때까지 떠 있으므로 {@code 응답 타임아웃 + 허용 오버헤드}
+     * </ul>
+     * 둘을 붙잡는 비율로 섞는다. {@code timeout} 시나리오(100% 붙잡음)는 3초 × 500 RPS ≈ 1,500 이 정상인데,
+     * 붙잡는 요청을 빼고 계산하면 상한이 125 로 나와 "대기가 쌓였다" 로 잘못 읽혔다.
      *
      * <p>관측치가 이것을 넘으면 요청이 어딘가에서 기다리며 쌓였다는 뜻이다. 2026-09-28 판정에서
      * 커넥션 풀 20 일 때 baseline 관측 480(상한 ~375), latency 1,342(상한 ~1,125) 였고, 풀을 30 으로
      * 올리자 303 · 1,057 로 상한 안에 들어왔다.
      *
      * <p>다만 넘었다고 원인이 Mock 이라는 뜻은 아니다. PC 가 멈칫해도 넘는다. 그 구분은 발사 지연이 한다.
+     *
+     * @param heldFraction Mock 이 응답 없이 붙잡는 요청의 비율. {@code TIMEOUT} 모드면 실패율, 아니면 0
      */
-    private static String expectedInFlight(LoadPlan plan, int registerLatencyMs) {
+    private static String expectedInFlight(LoadPlan plan, int registerLatencyMs, double heldFraction) {
         if (plan.rampUp().isZero()) {
             return "—";
         }
         double rps = (double) plan.totalRequests() / plan.rampUp().toSeconds();
-        double perRequestSec = (registerLatencyMs + plan.maxP95Overhead().toMillis()) / 1000.0;
+        long overheadMs = plan.maxP95Overhead().toMillis();
+        double answeredSec = (registerLatencyMs + overheadMs) / 1000.0;
+        double heldSec = (plan.responseTimeout().toMillis() + overheadMs) / 1000.0;
+        double perRequestSec = (1 - heldFraction) * answeredSec + heldFraction * heldSec;
         return "상한 ~" + Math.round(rps * perRequestSec);
     }
 

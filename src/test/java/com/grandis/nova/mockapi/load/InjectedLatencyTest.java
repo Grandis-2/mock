@@ -38,4 +38,12 @@ class InjectedLatencyTest {
     void zeroLatency() {
         assertThat(new InjectedLatency(0, 0.4).percentileMs(95)).isZero();
     }
+
+    /** 지터가 켜져 있어도 지연 0 에 "평균 0ms · 0 ~ 0ms 균등" 이라 적으면 흔드는 것처럼 읽힌다. */
+    @Test
+    @DisplayName("지연 0 이면 보고서에 '지연 없음' 으로 적는다")
+    void describesNoLatency() {
+        assertThat(new InjectedLatency(0, 0.4).describe()).isEqualTo("지연 없음");
+        assertThat(new InjectedLatency(500, 0.4).describe()).startsWith("평균 500ms · 300 ~ 700ms");
+    }
 }

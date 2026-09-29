@@ -30,6 +30,9 @@ public record InjectedLatency(int meanMs, double jitter) {
 
     /** 보고서에 적을 한 줄. */
     public String describe() {
+        if (meanMs <= 0) {
+            return "지연 없음";
+        }
         if (jitter <= 0) {
             return meanMs + "ms 고정";
         }
