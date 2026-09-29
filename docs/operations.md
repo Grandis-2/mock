@@ -25,6 +25,25 @@ cp src/main/resources/application.yml.example src/main/resources/application.yml
 **둘 다 예시 그대로 쓰면 된다.** 3307 포트가 이미 쓰이고 있을 때만 `.env` 의 `MYSQL_PORT` 와
 `application.yml` 의 `datasource.url` 을 **같이** 고친다. 한쪽만 고치면 접속이 거부된다.
 
+`application.yml` 의 `mock:` 절은 재기동했을 때 돌아가는 기본값이다. **범위를 벗어나면 Mock 이 뜨지
+않는다** — 틀린 값으로 조용히 도는 것보다 낫다. 지연 · 실패율은 설정 API 와 같은 범위다.
+
+| 설정 | 받는 범위 | 흔한 실수 |
+| --- | --- | --- |
+| `register-latency-ms` | 0 ~ 60000 | |
+| `failure-rate` | 0 ~ 1 | **5% 를 `5` 로 적기** — `0.05` 가 맞다. 막지 않으면 등록이 전부 실패한 채로 뜬다 |
+| `latency-jitter` | 0 ~ 1 | 1 을 넘기면 하한만 0 에서 잘려 평균이 조용히 올라간다 |
+| `timeout-hold-ms` | 0 이상 | 음수. 0 은 붙잡지 않고 바로 빈 500 을 보내는 시험 전용 값이라 운영 · 시연에서 쓰지 않는다 |
+
+뜨지 않으면 로그 맨 아래에 어느 값이 틀렸는지 나온다(확인함 — `failure-rate: 5` 로 기동).
+
+```
+APPLICATION FAILED TO START
+    Property: mock.failureRate
+    Value: "5.0"
+    Reason: 다음 값 이하여야 합니다 1.0
+```
+
 ```bash
 docker compose up -d      # 처음 뜰 때 docs/schema.sql 이 자동 실행된다
 ./gradlew bootRun         # http://localhost:8081
