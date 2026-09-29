@@ -27,7 +27,7 @@ cross-database 조회나 물리 FK 를 두지 않는다. 재기동해도 등록 
 com.grandis.nova.mockapi/
 ├── global/
 │   ├── chaos/      설정 스냅샷 · 지연·실패 주입 · 결함
-│   ├── config/     MockProperties (지연·실패율·타임아웃 유지 시간 기본값) · 모르는 필드 거절
+│   ├── config/     MockProperties (지연 평균·지터·실패율·타임아웃 유지 시간 기본값) · 모르는 필드 거절
 │   └── error/      오류 코드 · 응답 형식 · 예외 핸들러
 ├── registration/   등록 원장 — 등록 · 조회 · 취소 · 멱등 판정 · 채번
 └── admin/          설정 · 결함 주입 · 초기화 API
@@ -106,6 +106,9 @@ com.grandis.nova.mockapi/
 
 **Docker 가 없으면 MySQL 시험만 조용히 건너뛴다.** 빌드는 초록색이라 놓치기 쉽다. 동시성을 건드렸으면
 Docker 를 켜고, 결과에서 건너뜀이 0 인지 본다.
+
+**부하 시험은 빌드와 따로 돈다**(`./gradlew loadTest`, Mock 을 먼저 띄운다). 판정 기준과 결과는
+[load-test.md](load-test.md), 순서대로 돌리는 방법은 [operations.md](operations.md) 3장에 있다.
 
 구현 시 최소한 다음은 검증한다.
 
