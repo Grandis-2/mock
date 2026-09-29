@@ -3,6 +3,8 @@ package com.grandis.nova.mockapi.global.config;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
@@ -15,13 +17,17 @@ import org.springframework.validation.annotation.Validated;
  *
  * <p>{@code @Validated} 라 범위를 벗어난 값이 있으면 <b>Mock 이 기동하지 않는다.</b> 틀린 값으로
  * 조용히 도는 것보다 낫다.
+ *
+ * <p>지연과 실패율은 <b>설정 API 와 같은 범위</b>다({@code ConfigUpdateRequest}). 실행 중에는 막는 값을
+ * 기동할 때는 받으면, 재기동 한 번에 API 로는 넣을 수 없는 상태가 된다. 흔한 실수는 5% 를
+ * {@code failure-rate: 5} 로 적는 것이다 — 막지 않으면 그대로 떠서 등록이 전부 실패한다.
  */
 @Validated
 @ConfigurationProperties(prefix = "mock")
 public record MockProperties(
 
         /** 등록 요청이 일부러 기다리는 시간의 <b>평균</b>. 실제 대기는 아래 지터만큼 흔들린다. */
-        @DefaultValue("500") int registerLatencyMs,
+        @Min(0) @Max(60000) @DefaultValue("500") int registerLatencyMs,
 
         /**
          * 지연을 흔드는 폭. 실제 대기는 <b>평균 × (1 ∓ 이 값)</b> 범위의 균등분포다.
@@ -41,12 +47,20 @@ public record MockProperties(
          */
         @DecimalMin("0.0") @DecimalMax("1.0") @DefaultValue("0.4") double latencyJitter,
 
-        /** 등록 요청이 일시 실패할 확률. 0 ~ 1. */
-        @DefaultValue("0.05") double failureRate,
+        /** 등록 요청이 일시 실패할 확률. 0 ~ 1. 5% 는 5 가 아니라 0.05 다. */
+        @DecimalMin("0.0") @DecimalMax("1.0") @DefaultValue("0.05") double failureRate,
 
         @DefaultValue("HTTP_5XX") FailureMode failureMode,
 
-        /** TIMEOUT 모드에서 응답 없이 연결을 유지하는 시간. */
-        @DefaultValue("5000") long timeoutHoldMs
+        /**
+         * TIMEOUT 모드와 응답 유실 결함에서 응답 없이 연결을 유지하는 시간.
+         *
+         * <p>0 은 시험 전용이다 — 붙잡지 않고 바로 빈 500 으로 끝낸다. 워커에게는 결과 불명이 아니라
+         * 일시 실패로 보이므로 운영 · 시연에서는 쓰지 않는다.
+         *
+         * <p>음수는 뜻이 없는 값이라 막는다. {@code Thread.sleep} 이 예외를 던져 "처리하지 못한 오류" 로
+         * 찍히고, 부하 판정이 0건이어야 한다고 세는 서버 버그 로그와 섞인다.
+         */
+        @Min(0) @DefaultValue("5000") long timeoutHoldMs
 ) {
 }

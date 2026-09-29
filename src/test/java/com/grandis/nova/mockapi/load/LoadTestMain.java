@@ -19,7 +19,7 @@ import java.time.format.DateTimeFormatter;
  * <p><b>Mock 을 미리 띄워 두어야 한다.</b> 이 실행기는 서버를 기동하지 않는다. 부하를 거는 쪽과 받는
  * 쪽이 같은 JVM 에 있으면 서로 자원을 뺏어 무엇을 측정한 것인지 알 수 없다.
  *
- * <p>시나리오는 b-todo Phase 5 의 세 가지다.
+ * <p>시나리오는 세 가지다.
  * <ul>
  *   <li>{@code baseline} — 기본 설정 그대로. 평소 부하
  *   <li>{@code latency} — 지연 평균 1500ms · 실패율 0. <b>관측 지연이 설정값과 비슷한지</b> 본다.

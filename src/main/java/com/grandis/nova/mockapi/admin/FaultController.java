@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 결함 주입. 시험 환경 전용이며 운영에서는 노출하지 않는다.
+ * 결함 주입. 시험 · 시연용이다. Mock 자체가 시험용 서버라 인증이나 프로필로 따로 막지 않는다.
  *
  * <p>과제 원문에는 없지만 요구사항 8장이 "외부 성공 응답 유실을 재현해 원래 신청의 처리 지속 확인"
  * 을 요구하므로 실질적으로 필수다. 5% 확률에 기대지 않고 정확히 재현하는 수단이다.
