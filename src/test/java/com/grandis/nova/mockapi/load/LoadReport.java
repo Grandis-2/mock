@@ -28,9 +28,17 @@ public final class LoadReport {
      * @param externalKey    이 요청이 보낸 멱등 키. 끝나고 DB 를 <b>키로</b> 맞추기 위한 것이다
      * @param externalNumber 201 을 받았을 때 Mock 이 준 예약번호. 그 밖에는 null.
      *                       DB 에 적힌 번호와 같은지 봐야 "행은 있는데 다른 번호" 를 잡을 수 있다
+     * @param injectedMs     이 요청에 Mock 이 실제로 넣은 지연({@code X-Mock-Injected-Latency-Ms}).
+     *                       응답이 없거나 헤더가 없으면 null. 오버헤드는 요청마다 {@code latency − 이 값} 이다
      */
     public record Attempt(String externalKey, String externalNumber,
-                          Outcome outcome, int status, Duration latency) {
+                          Outcome outcome, int status, Duration latency, Long injectedMs) {
+
+        /** 응답을 받지 못한 요청. 주입 지연을 알 수 없다. */
+        public Attempt(String externalKey, String externalNumber,
+                       Outcome outcome, int status, Duration latency) {
+            this(externalKey, externalNumber, outcome, status, latency, null);
+        }
     }
 
     /**
@@ -81,15 +89,42 @@ public final class LoadReport {
         return all().stream().filter(a -> a.status() > 0).count();
     }
 
+    /** 관측 응답 지연의 백분위. 참고용이다 — 판정은 {@link #overheadPercentile} 로 한다. */
     public Duration percentile(double p) {
         List<Duration> sorted = all().stream()
                 .filter(a -> a.status() > 0)
                 .map(Attempt::latency)
                 .sorted(Comparator.naturalOrder())
                 .toList();
-        if (sorted.isEmpty()) {
-            return Duration.ZERO;
-        }
+        return sorted.isEmpty() ? Duration.ZERO : nearestRank(sorted, p);
+    }
+
+    /**
+     * <b>오버헤드의 백분위</b>. 요청마다 {@code 관측 − 그 요청에 실제로 뽑힌 지연} 을 구해 그 분포에서 뽑는다.
+     *
+     * <p>예전에는 {@code 관측 p95 − 주입 분포 p95} 로 셈했다. 지연을 흔들면 그건 오버헤드의 백분위가
+     * 아니다 — 분위수는 더하거나 빼지지 않아서, p99 "오버헤드" 가 p95 보다 작게 나온 적도 있다.
+     * 꼬리에 있는 요청이 오래 걸린 이유가 지연이 길게 뽑혀서인지 Mock 이 느려서인지 요청 단위로 갈라야
+     * Mock 의 꼬리가 보인다.
+     *
+     * @return 헤더를 받은 응답이 하나도 없으면 null (측정 불가)
+     */
+    public Long overheadPercentile(double p) {
+        List<Long> sorted = all().stream()
+                .filter(a -> a.status() > 0 && a.injectedMs() != null)
+                .map(a -> a.latency().toMillis() - a.injectedMs())
+                .sorted()
+                .toList();
+        return sorted.isEmpty() ? null : nearestRank(sorted, p);
+    }
+
+    /** 응답은 받았는데 주입 지연 헤더가 없는 수. 0 이어야 한다 — 있으면 그만큼 오버헤드를 모른다. */
+    public long respondedWithoutInjected() {
+        return all().stream().filter(a -> a.status() > 0 && a.injectedMs() == null).count();
+    }
+
+    /** 최근접 순위 백분위. 보간하지 않는다 — 실제로 관측된 값 중 하나를 돌려준다. */
+    private static <T> T nearestRank(List<T> sorted, double p) {
         int index = (int) Math.ceil(p / 100.0 * sorted.size()) - 1;
         return sorted.get(Math.clamp(index, 0, sorted.size() - 1));
     }
@@ -203,7 +238,8 @@ public final class LoadReport {
     /**
      * @param configVersion 이 실행에 적용된 Mock 설정 버전 (요구사항 5.4)
      * @param configBody    같은 목적. 지연·실패율을 그대로 남긴다
-     * @param injected      Mock 이 일부러 넣은 지연의 분포. 오버헤드는 관측값에서 이것의 같은 백분위를 뺀다
+     * @param injected      Mock 이 일부러 넣은 지연의 분포. 시나리오가 타임아웃에 걸치는지 · 동시 요청 상한에 쓴다.
+     *                      오버헤드는 이게 아니라 요청마다 받은 헤더로 계산한다
      * @param heldFraction  Mock 이 응답 없이 붙잡는 요청의 비율. 동시 요청 상한을 계산하는 데 쓴다
      * @param maxInFlight   동시에 떠 있던 요청의 최대치. 서버 쪽 커넥션 수의 대용값이다
      * @param elapsed       첫 발사부터 마지막 응답까지
@@ -273,7 +309,7 @@ public final class LoadReport {
                 .append(" | HTTP_5XX 모드. 응답이 없다는 것은 제시간에 못 답했다는 뜻이다 |\n");
         out.append("| 오버헤드 기준 | p95 ").append(plan.maxP95Overhead().toMillis())
                 .append("ms · p99 ").append(plan.maxP99Overhead().toMillis())
-                .append("ms | 관측 − 주입한 지연의 같은 백분위. 2026-09-28 실측으로 확정 |\n");
+                .append("ms | 요청마다 관측 − 그 요청에 뽑힌 지연, 그 분포의 백분위. 2026-09-28 실측으로 확정 |\n");
         out.append("| 발사 지연 한계 | ").append(plan.maxLaunchLag().toMillis())
                 .append("ms | 넘으면 목표 부하를 만들지 못한 실행이다 |\n\n");
 
@@ -303,15 +339,18 @@ public final class LoadReport {
         }
 
         out.append("## 지표\n\n");
-        out.append("주입한 지연은 **").append(injected.describe()).append("** 이다. 관측 백분위에서 ")
-                .append("주입한 지연의 **같은 백분위**를 뺀 값을 **오버헤드**로 본다 — Mock 이 실제로 쓴 시간이다. ")
-                .append("절대 백분위로 두면 설정 500ms 에 1.5초도 통과한다.\n\n");
-        out.append("| 지표 | 관측 | 주입한 지연 | 오버헤드 | 기준 | 판정 |\n")
-                .append("| --- | --- | --- | --- | --- | --- |\n");
-        appendOverhead(out, "p95", percentile(95), injected.percentileMs(95),
-                plan.maxP95Overhead(), responded());
-        appendOverhead(out, "p99", percentile(99), injected.percentileMs(99),
-                plan.maxP99Overhead(), responded());
+        out.append("주입한 지연은 **").append(injected.describe()).append("** 이다. **요청마다** 관측 응답 지연에서 ")
+                .append("그 요청에 실제로 뽑힌 지연(`X-Mock-Injected-Latency-Ms`)을 빼고, 그 분포의 백분위를 ")
+                .append("**오버헤드**로 본다 — Mock 이 실제로 쓴 시간의 꼬리다. 관측 백분위는 참고로만 적는다.\n\n");
+        out.append("| 지표 | 관측 (참고) | 오버헤드 | 기준 | 판정 |\n")
+                .append("| --- | --- | --- | --- | --- |\n");
+        appendOverhead(out, "p95", percentile(95), overheadPercentile(95), plan.maxP95Overhead());
+        appendOverhead(out, "p99", percentile(99), overheadPercentile(99), plan.maxP99Overhead());
+        long withoutHeader = respondedWithoutInjected();
+        if (withoutHeader > 0) {
+            out.append("| ⚠ 주입 지연 헤더 없는 응답 | ").append(withoutHeader)
+                    .append("건 | — | 0건 | 그만큼 오버헤드를 모른다 |\n");
+        }
         out.append("| 에러율(접수 성공 제외) | ").append(percent(failureRate()))
                 .append(" | — | — | — | 참고 |\n");
         out.append("| **미완료(결과 불명)** | ").append(counts.get(Outcome.UNKNOWN))
@@ -454,17 +493,15 @@ public final class LoadReport {
      * 것처럼 보인다. 요구사항 8장이 실패를 결과에서 빼지 말라고 한 것과 정확히 반대되는 왜곡이다.
      */
     private static void appendOverhead(StringBuilder out, String name, Duration observed,
-                                       long injectedMs, Duration target, long responded) {
+                                       Long overheadMs, Duration target) {
         out.append("| ").append(name).append(" | ");
-        if (responded == 0) {
-            out.append("측정 불가 | ").append(injectedMs).append("ms | — | ")
-                    .append(target.toMillis()).append("ms | 응답 0건 |\n");
+        if (overheadMs == null) {
+            out.append("측정 불가 | — | ").append(target.toMillis()).append("ms | 헤더를 받은 응답 0건 |\n");
             return;
         }
-        long overhead = observed.toMillis() - injectedMs;
-        out.append(observed.toMillis()).append("ms | ").append(injectedMs).append("ms | ")
-                .append(overhead).append("ms | ").append(target.toMillis()).append("ms | ")
-                .append(overhead <= target.toMillis() ? "이내" : "초과").append(" |\n");
+        out.append(observed.toMillis()).append("ms | ").append(overheadMs).append("ms | ")
+                .append(target.toMillis()).append("ms | ")
+                .append(overheadMs <= target.toMillis() ? "이내" : "초과").append(" |\n");
     }
 
     private static String percent(double ratio) {

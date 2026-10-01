@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.load;
 
+import com.grandis.nova.mockapi.global.chaos.DefaultFailureInjector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -144,13 +145,15 @@ public final class LoadRunner {
         try {
             // 본문을 버리지 않고 읽는다. 201 의 예약번호를 DB 에 적힌 번호와 맞춰 봐야 하기 때문이다.
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            Duration latency = Duration.between(sentAt, Instant.now());
             Outcome outcome = Outcome.ofStatus(response.statusCode());
             report.add(new LoadReport.Attempt(
                     key,
                     outcome == Outcome.ACCEPTED ? externalNumberOf(response.body()) : null,
                     outcome,
                     response.statusCode(),
-                    Duration.between(sentAt, Instant.now())));
+                    latency,
+                    injectedMsOf(response)));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             report.add(new LoadReport.Attempt(
@@ -172,6 +175,24 @@ public final class LoadRunner {
     private static String externalNumberOf(String body) {
         var matcher = EXTERNAL_NUMBER.matcher(body);
         return matcher.find() ? matcher.group(1) : null;
+    }
+
+    /**
+     * 이 요청에 Mock 이 실제로 넣은 지연. 요청마다 오버헤드를 구하는 데 쓴다.
+     *
+     * <p>없으면 null 이다. 등록 응답에는 반드시 있어야 하므로(지연 0 이어도 {@code 0}), 남으면 보고서가
+     * 그 건수를 경고로 적는다.
+     */
+    private static Long injectedMsOf(HttpResponse<?> response) {
+        return response.headers().firstValue(DefaultFailureInjector.INJECTED_LATENCY_HEADER)
+                .map(value -> {
+                    try {
+                        return Long.valueOf(value.trim());
+                    } catch (NumberFormatException e) {
+                        return null;
+                    }
+                })
+                .orElse(null);
     }
 
     private void trackEnter() {
