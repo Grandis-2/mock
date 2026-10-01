@@ -123,8 +123,12 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 기대므로 H2 에서 통과해도 MySQL 에서 통과한다는 보장이 없다. 그런 시험은 `RegistrationConcurrencyTest`
 처럼 Testcontainers 로 진짜 MySQL 8.4 를 띄워 돌린다. 스키마는 `docs/schema.sql` 을 그대로 넣는다.
 
-**Docker 가 없으면 MySQL 시험만 조용히 건너뛴다.** 빌드는 초록색이라 놓치기 쉽다. 동시성을 건드렸으면
+**Docker 가 없으면 MySQL 시험만 조용히 건너뛴다.** 로컬 빌드는 초록색이라 놓치기 쉽다. 동시성을 건드렸으면
 Docker 를 켜고, 결과에서 건너뜀이 0 인지 본다.
+
+**CI 는 건너뛴 시험이 하나라도 있으면 실패한다**(`.github/workflows/build.yml`). 로컬 빌드 성공과 CI 성공은
+다르다 — 로컬은 Docker 가 꺼져 있어도 초록이지만 CI 는 MySQL 시험까지 돌아야 초록이다. **`@Disabled` 도
+건너뜀이라 CI 가 막는다.** 의도한 것이다. 시험을 꺼야 하면 끄지 말고 고치거나, 이유를 PR 에 적고 지운다.
 
 **부하 시험은 빌드와 따로 돈다**(`./gradlew loadTest`, Mock 을 먼저 띄운다). 판정 기준과 결과는
 [load-test.md](load-test.md), 순서대로 돌리는 방법은 [operations.md](operations.md) 3장에 있다.
