@@ -27,8 +27,14 @@ import java.util.Map;
 public record RegistrationSnapshot(
         Map<String, String> numbersByKey,
         boolean quiesced,
-        Duration waited
+        Duration waited,
+        String commitDurability
 ) {
+
+    /** 원장만 있는 스냅숏. 커밋 동기화 설정은 모른다("?"). 시험에서 쓴다. */
+    public RegistrationSnapshot(Map<String, String> numbersByKey, boolean quiesced, Duration waited) {
+        this(numbersByKey, quiesced, waited, "?");
+    }
 
     /** 행 수를 이 간격으로 다시 센다. */
     private static final Duration POLL = Duration.ofSeconds(1);
@@ -57,7 +63,8 @@ public record RegistrationSnapshot(
         try (Connection connection = DriverManager.getConnection(jdbcUrl, user, password)) {
             boolean quiesced = awaitQuiesce(connection, startedAt);
             return new RegistrationSnapshot(
-                    readRows(connection), quiesced, Duration.between(startedAt, Instant.now()));
+                    readRows(connection), quiesced, Duration.between(startedAt, Instant.now()),
+                    readDurability(connection));
         } catch (SQLException e) {
             throw new IllegalStateException(
                     "등록 원장을 읽지 못했습니다 — " + jdbcUrl + " : " + e.getMessage(), e);
@@ -95,6 +102,24 @@ public record RegistrationSnapshot(
     }
 
     /** 번호가 null 인 행(등록 전 취소 표식)도 담는다. 키가 있다는 것 자체가 판정에 쓰인다. */
+    /**
+     * MySQL 의 커밋 동기화 설정. 보고서의 실행 조건에 적는다.
+     *
+     * <p>판정 숫자를 가장 크게 흔든 것이 이 설정이었다. 커밋마다 디스크 동기화(1 · 1)를 하면 Docker Desktop 디스크에서
+     * COMMIT 이 평균 29ms · p99 200ms 까지 걸려, 풀이 막히고 결과 불명이 수천 건 났다. 완화(2 · 0)하면 0.49ms 다
+     * (2026-10-01). 보고서에 없으면 다른 설정으로 돌린 숫자를 같은 조건으로 오해한다.
+     */
+    private static String readDurability(Connection connection) {
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(
+                     "SELECT @@innodb_flush_log_at_trx_commit, @@sync_binlog")) {
+            rs.next();
+            return "innodb_flush_log_at_trx_commit=" + rs.getString(1) + " · sync_binlog=" + rs.getString(2);
+        } catch (SQLException e) {
+            return "읽지 못함 (" + e.getMessage() + ")";
+        }
+    }
+
     private static Map<String, String> readRows(Connection connection) throws SQLException {
         Map<String, String> byKey = new HashMap<>();
         try (Statement statement = connection.createStatement();
