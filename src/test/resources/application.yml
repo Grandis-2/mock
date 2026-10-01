@@ -3,6 +3,10 @@
 # H2 는 컨텍스트 로딩과 단순 검증용이다. 멱등 등록의 동시성은 잠금·중복 키 동작에 기대므로
 # H2 에서 통과해도 MySQL 에서 통과한다는 보장이 없다. 동시성 시험은 MySQL 로 돌린다.
 spring:
+  # 운영과 같게 가상 스레드로 돈다. 꺼져 있으면 Mock 이 뜨지 않는다(VirtualThreadGuard).
+  threads:
+    virtual:
+      enabled: true
   datasource:
     url: jdbc:h2:mem:mockapi;MODE=MySQL;DB_CLOSE_DELAY=-1
     username: sa
