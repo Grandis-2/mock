@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.registration.api;
 
+import com.grandis.nova.mockapi.global.validation.Identifiers;
 import com.grandis.nova.mockapi.registration.application.RegisterResult;
 import com.grandis.nova.mockapi.registration.application.RegistrationReader;
 import com.grandis.nova.mockapi.registration.application.RegistrationService;

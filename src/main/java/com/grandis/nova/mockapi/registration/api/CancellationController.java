@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.registration.api;
 
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
+import com.grandis.nova.mockapi.global.validation.Identifiers;
 import com.grandis.nova.mockapi.registration.application.CancellationService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;

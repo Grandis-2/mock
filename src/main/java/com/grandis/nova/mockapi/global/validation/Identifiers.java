@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration.api;
+package com.grandis.nova.mockapi.global.validation;
 
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
@@ -25,10 +25,13 @@ import java.util.regex.Pattern;
  *   <li>취소 본문 — 본문 record 는 애너테이션으로도 필드 이름이 제대로 나온다. 다만 "키와 번호 중 하나 이상"
  *       은 애너테이션으로 쓸 수 없어 어차피 컨트롤러에서 검사하고, 형식 규칙도 등록 키와 한 곳에서 맞춘다</li>
  * </ul>
+ *
+ * <p>{@code global} 에 두는 이유 — 등록 파트(등록 · 조회 · 취소)와 제어 파트(결함을 거는 키)가 같은 키를 다룬다.
+ * 규칙을 두 곳에 두면 한쪽만 바뀌어, 결함은 걸리는데 그 키로 등록이 안 되는 식으로 어긋난다.
  */
-final class Identifiers {
+public final class Identifiers {
 
-    static final int MAX_LENGTH = 100;
+    public static final int MAX_LENGTH = 100;
 
     private static final Pattern FORMAT = Pattern.compile("(?!\\.{1,2}$)[A-Za-z0-9._-]{1," + MAX_LENGTH + "}");
 
@@ -39,7 +42,7 @@ final class Identifiers {
      * @param name 오류 메시지에 쓸 이름. API 의 필드 · 헤더 이름이다
      * @throws MockException 형식이 맞지 않으면 400
      */
-    static void requireFormat(String name, String value) {
+    public static void requireFormat(String name, String value) {
         if (!FORMAT.matcher(value).matches()) {
             throw new MockException(ErrorCode.INVALID_REQUEST,
                     name + " 은(는) 영문 · 숫자 · . _ - 로 된 1~" + MAX_LENGTH + "자여야 합니다.");
