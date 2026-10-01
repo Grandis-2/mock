@@ -406,6 +406,12 @@ class RegistrationApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage").value("sku 은(는) 80자 이하여야 합니다."));
 
+        // 타입을 바꿔 받지 않는다. 받으면 워커의 타입 오류가 Mock 에서는 묻힌다
+        register(newKey(), """
+                {"customerId":"1001","productId":12,"sku":"SM-G999-256-BLK"}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorMessage").value("customerId 값의 형식이 올바르지 않습니다."));
+
         // 예전 README 계약의 필드. 계약에 없는 필드는 거절한다
         register(newKey(), """
                 {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK","quantity":1}""")

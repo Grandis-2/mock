@@ -5,6 +5,8 @@ import jakarta.validation.ConstraintViolationException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.catalina.connector.ClientAbortException;
 import org.slf4j.Logger;
@@ -28,6 +30,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import tools.jackson.core.JacksonException;
+import tools.jackson.core.exc.StreamReadException;
 import tools.jackson.databind.exc.InvalidFormatException;
 import tools.jackson.databind.exc.MismatchedInputException;
 import tools.jackson.databind.exc.UnrecognizedPropertyException;
@@ -54,6 +57,9 @@ public class GlobalExceptionHandler {
     public static final String UNHANDLED_MESSAGE = "Mock 이 처리하지 못한 오류입니다.";
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    /** Jackson 의 중복 필드 메시지({@code Duplicate Object property "customerId"})에서 이름을 꺼낸다. */
+    private static final Pattern QUOTED = Pattern.compile("\"([^\"]+)\"");
 
     /** Mock 이 계약대로 내는 오류. */
     @ExceptionHandler(MockException.class)
@@ -230,6 +236,10 @@ public class GlobalExceptionHandler {
      */
     private static String describeUnreadable(HttpMessageNotReadableException e) {
         JacksonException cause = findCause(e, JacksonException.class);
+        if (cause instanceof StreamReadException read && read.getOriginalMessage().startsWith("Duplicate")) {
+            Matcher name = QUOTED.matcher(read.getOriginalMessage());
+            return name.find() ? name.group(1) + " 필드가 두 번 왔습니다." : "같은 필드가 두 번 왔습니다.";
+        }
         if (cause instanceof UnrecognizedPropertyException unknown) {
             return unknown.getPropertyName() + " 은(는) 알 수 없는 필드입니다."
                     + knownFields(unknown.getKnownPropertyIds());
