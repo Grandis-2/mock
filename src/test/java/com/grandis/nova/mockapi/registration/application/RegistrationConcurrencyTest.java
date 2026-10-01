@@ -27,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -402,6 +403,122 @@ class RegistrationConcurrencyTest {
                     assertThat(saved.isCanceled()).isTrue();
                     assertThat(saved.externalNumber()).isNull();
                 });
+    }
+
+    /**
+     * 키 조회 404 의 뜻("지금 등록이 없다")을 시험으로 남긴다. 지연은 트랜잭션 밖이라 키 조회가 기다리지 않고
+     * 404 를 주며, 지연이 끝나면 같은 키가 ACTIVE 가 된다. 워커가 이 404 만 보고 포기하면 유령 등록이 된다.
+     */
+    @Test
+    @DisplayName("지연 중인 등록은 키 조회에 404 로 보이고, 지연이 끝나면 ACTIVE 다")
+    void byKeyDoesNotSeeRegistrationInLatency() throws Exception {
+        String key = UUID.randomUUID().toString();
+        var inLatency = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            inLatency.countDown();
+            awaitQuietly(release);
+            return invocation.callRealMethod();
+        }).when(failureInjector).apply(any());
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<RegisterResult> registration = pool.submit(() -> service.register(key, COMMAND));
+                assertThat(inLatency.await(10, TimeUnit.SECONDS)).isTrue();
+
+                // 잠금을 쥔 등록이 없으니 기다리지 않고 바로 답한다
+                Future<MockHttpServletResponse> lookup = pool.submit(() ->
+                        mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
+                                .andReturn().getResponse());
+                assertThat(lookup.get(5, TimeUnit.SECONDS).getStatus()).isEqualTo(404);
+
+                release.countDown();
+                assertThat(registration.get(10, TimeUnit.SECONDS).replayed()).isFalse();
+            } finally {
+                release.countDown();
+            }
+        }
+
+        assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
+                .andReturn().getResponse().getContentAsString()).contains("\"ACTIVE\"");
+    }
+
+    /**
+     * 1062 분기를 확률에 맡기지 않고 밟는다. 등록 A 를 "키가 없음을 본 뒤 · INSERT 직전"(번호 생성)에 붙잡고, 그 사이
+     * 같은 키 등록 B 를 끝까지 커밋시킨다. 놓아주면 A 의 INSERT 는 반드시 중복 키다. 커넥터 · Hibernate 를
+     * 올리다 {@code DuplicateKey} 가 예외를 못 알아보게 되면 A 가 재생 대신 500 으로 끝나 여기서 깨진다.
+     */
+    @Test
+    @DisplayName("INSERT 직전에 같은 키 등록이 커밋되면 1062 를 받아 다시 시도하고 그 등록을 재생한다")
+    void duplicateKeyFromRegistrationIsReplayed() throws Exception {
+        String key = UUID.randomUUID().toString();
+        var beforeInsert = holdFirstAttemptBeforeInsert();
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<RegisterResult> late = pool.submit(() -> service.register(key, COMMAND));
+                assertThat(beforeInsert.reached().await(10, TimeUnit.SECONDS)).isTrue();
+
+                RegisterResult early = service.register(key, COMMAND);   // 끝까지 커밋한다
+                beforeInsert.release().countDown();
+                RegisterResult replayed = late.get(10, TimeUnit.SECONDS);
+
+                assertThat(early.replayed()).isFalse();
+                assertThat(replayed.replayed()).as("1062 뒤 새 트랜잭션에서 다시 읽어 재생").isTrue();
+                assertThat(replayed.registration().externalNumber())
+                        .isEqualTo(early.registration().externalNumber());
+            } finally {
+                beforeInsert.release().countDown();
+            }
+        }
+    }
+
+    /** 위와 같은 자리에 취소가 끼어든 경우. 다시 읽은 행이 취소 표식이라 재생보다 먼저 409 다. */
+    @Test
+    @DisplayName("INSERT 직전에 같은 키 취소 표식이 커밋되면 1062 를 받아 다시 시도하고 KEY_CANCELED 다")
+    void duplicateKeyFromCancelMarkerIsKeyCanceled() throws Exception {
+        String key = UUID.randomUUID().toString();
+        var beforeInsert = holdFirstAttemptBeforeInsert();
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<RegisterResult> late = pool.submit(() -> service.register(key, COMMAND));
+                assertThat(beforeInsert.reached().await(10, TimeUnit.SECONDS)).isTrue();
+
+                assertThat(cancellations.cancel(key, null).hadActiveRegistration()).isFalse();
+                beforeInsert.release().countDown();
+
+                assertThatThrownBy(() -> late.get(10, TimeUnit.SECONDS))
+                        .isInstanceOf(ExecutionException.class)
+                        .cause()
+                        .isInstanceOfSatisfying(MockException.class,
+                                e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.KEY_CANCELED));
+            } finally {
+                beforeInsert.release().countDown();
+            }
+        }
+
+        assertThat(repository.findById(key)).get().satisfies(saved -> {
+            assertThat(saved.isCanceled()).isTrue();
+            assertThat(saved.externalNumber()).isNull();
+        });
+    }
+
+    /** 번호 생성은 "키 없음" 을 본 뒤 INSERT 직전에 불린다. 첫 시도만 거기서 붙잡고, 나머지는 그대로 둔다. */
+    private Hold holdFirstAttemptBeforeInsert() {
+        var hold = new Hold(new CountDownLatch(1), new CountDownLatch(1));
+        var first = new AtomicBoolean(true);
+        doAnswer(invocation -> {
+            if (first.getAndSet(false)) {
+                hold.reached().countDown();
+                awaitQuietly(hold.release());
+            }
+            return invocation.callRealMethod();
+        }).when(numbers).next(any());
+        return hold;
+    }
+
+    private record Hold(CountDownLatch reached, CountDownLatch release) {
     }
 
     /**

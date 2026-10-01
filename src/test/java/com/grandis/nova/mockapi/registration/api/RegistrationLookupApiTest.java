@@ -124,6 +124,19 @@ class RegistrationLookupApiTest {
                 .andExpect(jsonPath("$.canceledAt").value("2026-09-16T10:10:00.123Z"));
     }
 
+    /** 형식이 틀린 번호를 조회까지 보내면 404 NOT_FOUND("그 기록이 없다")로 나가 뜻이 섞인다. */
+    @Test
+    @DisplayName("번호가 영문 · 숫자 · . _ - 1~100자가 아니면 400 - 조회하지 않는다")
+    void byNumberInvalidFormat() throws Exception {
+        for (String number : new String[]{"R 1", "번호-1", "R".repeat(101), ".."}) {
+            byNumber(number)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.errorMessage")
+                            .value("externalNumber 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
+        }
+    }
+
     @Test
     @DisplayName("없는 번호 - 404 NOT_FOUND")
     void byNumberNotFound() throws Exception {
@@ -204,13 +217,14 @@ class RegistrationLookupApiTest {
     }
 
     @Test
-    @DisplayName("키가 비었거나 100자를 넘으면 400 - 100자는 받는다")
-    void byKeyInvalidLength() throws Exception {
-        for (String key : new String[]{"   ", "k".repeat(101)}) {
+    @DisplayName("키가 영문 · 숫자 · . _ - 1~100자가 아니면 400 - 100자는 받는다")
+    void byKeyInvalidFormat() throws Exception {
+        for (String key : new String[]{"   ", "k".repeat(101), "a b", "키-1"}) {
             byKey(key)
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
-                    .andExpect(jsonPath("$.errorMessage").value("externalKey 은(는) 1~100자여야 합니다."));
+                    .andExpect(jsonPath("$.errorMessage")
+                            .value("externalKey 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
         }
         // 인메모리 DB 는 시험 클래스끼리 공유된다. 다른 시험이 등록한 키와 겹치지 않게 새로 만든다
         String longest = (newKey() + "k".repeat(100)).substring(0, 100);

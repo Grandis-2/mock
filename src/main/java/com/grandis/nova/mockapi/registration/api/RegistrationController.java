@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.registration.api;
 
+import com.grandis.nova.mockapi.global.validation.Identifiers;
 import com.grandis.nova.mockapi.registration.application.RegisterResult;
 import com.grandis.nova.mockapi.registration.application.RegistrationReader;
 import com.grandis.nova.mockapi.registration.application.RegistrationService;
@@ -43,7 +44,7 @@ public class RegistrationController {
     public ResponseEntity<RegistrationResponse> register(
             @RequestHeader(IDEMPOTENCY_KEY) String key,
             @Valid @RequestBody RegisterRequest request) {
-        Identifiers.requireLength(IDEMPOTENCY_KEY, key);
+        Identifiers.requireFormat(IDEMPOTENCY_KEY, key);
 
         RegisterResult result = service.register(key, request.toCommand());
 
@@ -56,13 +57,15 @@ public class RegistrationController {
     /** 번호로 단건 조회. 등록 응답과 같은 형식이고 취소된 등록도 돌려준다. */
     @GetMapping("/{externalNumber}")
     public RegistrationResponse findByNumber(@PathVariable String externalNumber) {
+        // 형식이 틀린 번호는 400 이다. 조회까지 보내면 404 NOT_FOUND("그 기록이 없다")로 나가 뜻이 섞인다.
+        Identifiers.requireFormat("externalNumber", externalNumber);
         return RegistrationResponse.from(reader.findByNumber(externalNumber));
     }
 
     /** 키로 등록 상태 조회. 응답 유실 뒤 재시도 전에 워커가 부른다. 404 는 "지금 등록이 없다" 는 뜻이다. */
     @GetMapping("/by-key/{externalKey}")
     public KeyStatusResponse findByKey(@PathVariable String externalKey) {
-        Identifiers.requireLength("externalKey", externalKey);
+        Identifiers.requireFormat("externalKey", externalKey);
         return KeyStatusResponse.from(reader.findByKey(externalKey));
     }
 }

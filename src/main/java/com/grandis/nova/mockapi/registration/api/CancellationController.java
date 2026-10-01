@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.registration.api;
 
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
+import com.grandis.nova.mockapi.global.validation.Identifiers;
 import com.grandis.nova.mockapi.registration.application.CancellationService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
@@ -30,10 +31,10 @@ public class CancellationController {
             throw new MockException(ErrorCode.INVALID_REQUEST, "externalKey 와 externalNumber 중 하나는 있어야 합니다.");
         }
         if (key != null) {
-            Identifiers.requireLength("externalKey", key);
+            Identifiers.requireFormat("externalKey", key);
         }
         if (number != null) {
-            Identifiers.requireLength("externalNumber", number);
+            Identifiers.requireFormat("externalNumber", number);
         }
         return CancelResponse.from(service.cancel(key, number));
     }

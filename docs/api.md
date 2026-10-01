@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.4 / 2026-10-01 (워커 타임아웃 5초 · 유지 7초 · 결과 불명 처리 · 키 조회 404 의 뜻 · 포기 규칙 · 없는 경로 `NO_SUCH_ENDPOINT` · 500 문구 구분 · 헤더 검사) |
+| 버전 / 작성일 | 5.5 / 2026-10-01 (키 · 번호 형식 제한 · 타입 자동 변환과 중복 필드 거절 · 시각 밀리초 세 자리) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
 | 기준 | ERD v5 (`스마트폰 사전예약 + 최소 일반 판매 ERD · v5 · 2026-09-17`, dbdiagram) |
@@ -103,6 +103,8 @@ Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RE
 
 **요청 본문에 계약에 없는 필드가 있으면 400 `INVALID_REQUEST` 다.** 모르는 필드를 조용히 버리면 워커가 계약과 다른 본문을 보내도 아무도 모르고, 설정 API 에 없는 값을 넣어도 200 이 나와 적용된 줄 알게 된다. 저장하지 않는 필드(취소의 `reason`)도 계약에 있으면 받는다.
 
+**타입이 다른 값도 바꿔 받지 않는다.** `"customerId": "1001"`(문자열 숫자) · `1.9`(실수 → 정수) · `""`(빈 문자열) · `"sku": 123`(숫자 → 문자열) · 열거형 자리의 숫자(`"failureMode": 1`)는 모두 400 이다. 바꿔 주면 워커의 타입 오류가 Mock 에서는 묻히고 실제 외부 시스템에서야 드러난다. 값이 바뀌지 않는 정수 → 실수(`"failureRate": 1`)만 받는다. **같은 필드가 두 번 오면** 마지막 값을 쓰지 않고 400 이다.
+
 400 의 `errorMessage` 에는 무엇이 틀렸는지 담는다. 문구는 사람이 읽으라고 둔 것이고, 워커는 `errorCode` 로 분기한다.
 
 | 틀린 것 | `errorMessage` 예 |
@@ -110,7 +112,9 @@ Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RE
 | 계약에 없는 필드 | `quantity 은(는) 알 수 없는 필드입니다. 받을 수 있는 필드: customerId, productId, sku` |
 | enum 값 | `failureMode 은(는) HTTP_5XX, TIMEOUT 중 하나여야 합니다. 받은 값: HTTP_429` |
 | 필수 값 누락 | `sku 은(는) 필수입니다.` |
-| 길이 | `sku 은(는) 80자 이하여야 합니다.` · `Idempotency-Key 은(는) 1~100자여야 합니다.` |
+| 타입이 다른 값 | `customerId 값의 형식이 올바르지 않습니다.` |
+| 같은 필드 두 번 | `customerId 필드가 두 번 왔습니다.` |
+| 길이 · 형식 | `sku 은(는) 80자 이하여야 합니다.` · `Idempotency-Key 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다.` |
 | 필수 헤더 누락 | `Idempotency-Key 헤더가 필요합니다.` |
 | `Content-Type` | `Content-Type 이 application/json 이어야 합니다. 받은 값: application/*` |
 | `Accept` | `Accept 가 application/json 을 받아야 합니다. 받은 값: text/plain` |
@@ -149,7 +153,16 @@ ERD 의 `preorder_token` 은 `char(36)` UUID 이며 "공개 UUID 이자 외부 M
 - 등록·조회·취소가 같은 키를 쓴다.
 - 결과 불명이라고 새 키를 만들지 않는다. 같은 키로 재시도하거나 `by-key` 조회로 먼저 확인한다.
 - 식별자 비교는 **대소문자를 구별한다.** ERD 가 키 칸을 `COLLATE utf8mb4_bin` 으로 둔 것과 같은 규칙이다.
-- Mock 은 키 형식을 UUID 로 강제하지 않는다. ERD 키 칸이 `varchar(100)` 이므로 **1~100자**만 검사한다. Mock 단독 시험에서 `test-lost-1` 같은 키를 쓸 수 있다.
+- Mock 은 키를 UUID 로 강제하지 않는다. **영문 · 숫자 · `.` `_` `-` 로 된 1~100자**(ERD 키 칸 `varchar(100)`)면 받는다. Mock 단독 시험에서 `test-lost-1` 같은 키를 쓸 수 있다. 외부 번호(`externalNumber`)도 같은 규칙이다.
+- 그 밖의 문자는 400 이다. 받아 놓고 다시 찾을 수 없는 키를 만들지 않기 위해서다.
+
+  | 막는 것 | 받으면 생기는 일 |
+  | --- | --- |
+  | `/` | 키 조회는 키를 경로에 넣는다. 등록은 되는데 키 조회로 찾을 수 없다 |
+  | 공백 | 키 칸 콜레이션이 끝 공백을 무시하고 비교한다(PAD SPACE). `pad-1 ` 의 등록을 `pad-1` 의 조회 · 취소가 잡는다 |
+  | 비 ASCII | 헤더가 ISO-8859-1 로 읽혀 깨진 채 저장된다 |
+  | `,` | `Idempotency-Key` 헤더가 두 개면 `a,b` 한 키로 합쳐진다 |
+  | `.` · `..` 만으로 된 키 | 경로에서 현재 · 상위 경로로 해석된다 |
 
 ## 내용 비교
 
@@ -179,6 +192,8 @@ ERD `external_mock.preorder_registrations` 와 1:1 이다.
 | `canceledAt` | datetime | `canceled_at` | 취소 표식을 남긴 시각 |
 
 `status = ACTIVE` 이면 나머지 필드가 모두 채워져 있어야 한다. ERD 의 `ck_registration_active_fields` CHECK 가 그것이다. 등록 전 취소는 키·상태·취소 시각만 있는 행으로 남는다.
+
+시각은 모두 UTC 이고 **밀리초 세 자리**로 쓴다(`2026-09-16T10:00:03.000Z`). 밀리초가 0 이어도 `.000` 을 붙인다. 제어 API 의 `appliedAt` · `createdAt` 도 같다.
 
 `quantity` 는 ERD 에서 제거했다. 사전예약 신청 단위가 수량 1 고정이고 `preorders` 에도 수량 칸이 없다.
 
@@ -211,7 +226,7 @@ ERD `external_mock.preorder_registrations` 와 1:1 이다.
 
 ### 요구사항
 
-- 본 서비스가 접수한 예약을 등록하고 외부 예약번호를 발급한다. 형식은 **`R-yyyyMMdd-NNNNNNNNNN`** — UTC 발급일 + 10자리 난수. 겹치면 새 번호로 다시 뽑는다. 6자리면 하루 100만 개라 부하 시험에서 동나고, `reset` 뒤 전에 준 번호가 다시 나와 본 서비스의 UNIQUE 저장이 깨질 수 있어서 10자리다.
+- 본 서비스가 접수한 예약을 등록하고 외부 예약번호를 발급한다. 형식은 **`R-yyyyMMdd-NNNNNNNNNN`** — UTC 발급일 + 10자리 난수. 겹치면 새 번호로 다시 뽑는다. 6자리면 하루 100만 개라 부하 시험에서 동나고, `reset` 뒤 전에 준 번호가 다시 나와 본 서비스의 UNIQUE 저장이 깨질 수 있어서 10자리다. 10자리여도 반복 실행에서는 겹칠 확률이 쌓이므로 본 서비스 쪽도 함께 비운다(아래 reset).
 - 같은 키·같은 내용의 성공 요청은 같은 외부 예약번호를 반환한다. (과제 명세)
 - **같은 키·다른 내용의 요청은 422 로 거절한다.** (요구사항 5.3 · ERD)
 - 키 선점·등록·결과 기록을 원자적으로 처리한다.
@@ -232,7 +247,7 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 
 | 이름 | 위치 | 타입 | 필수 | 제약 |
 | --- | --- | --- | --- | --- |
-| `Idempotency-Key` | header | string | 필수 | 1~100자. 본 서비스는 `preorder_token`(`char(36)` UUID)을 보낸다 |
+| `Idempotency-Key` | header | string | 필수 | 영문 · 숫자 · `. _ -` 1~100자(멱등 키 절). 본 서비스는 `preorder_token`(`char(36)` UUID)을 보낸다 |
 
 **Body**
 
@@ -351,17 +366,18 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 Accept: application/json
 ```
 
-| 이름 | 위치 | 타입 | 필수 |
-| --- | --- | --- | --- |
-| `externalNumber` | path | string | 필수 |
+| 이름 | 위치 | 타입 | 필수 | 제약 |
+| --- | --- | --- | --- | --- |
+| `externalNumber` | path | string | 필수 | 영문 · 숫자 · `. _ -` 1~100자 |
 
 **Body**: 없음
 
 ### 시스템 처리
 
-1. 외부 예약번호로 등록 행을 조회한다.
-2. 취소된 등록이면 `status` 를 `CANCELED` 로, `canceledAt` 을 채워 반환한다. 숨기지 않는다.
-3. 없으면 404.
+1. 번호 형식이 틀리면 400. 조회하지 않는다 — 404 `NOT_FOUND` 는 "그 기록이 없다" 에만 쓴다.
+2. 외부 예약번호로 등록 행을 조회한다.
+3. 취소된 등록이면 `status` 를 `CANCELED` 로, `canceledAt` 을 채워 반환한다. 숨기지 않는다.
+4. 없으면 404.
 
 ### Response
 
@@ -371,6 +387,7 @@ Accept: application/json
 
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | 번호 형식이 틀림 |
 | 404 | `NOT_FOUND` | 등록되지 않았습니다 |
 
 ### 확인 시나리오
@@ -407,7 +424,7 @@ Accept: application/json
 
 | 이름 | 위치 | 타입 | 필수 | 제약 |
 | --- | --- | --- | --- | --- |
-| `externalKey` | path | string | 필수 | 1~100자. 우리 `preorder_token` |
+| `externalKey` | path | string | 필수 | 영문 · 숫자 · `. _ -` 1~100자. 우리 `preorder_token` |
 
 **Body**: 없음
 
@@ -507,8 +524,8 @@ Accept: application/json
 
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `externalKey` | string | 조건부 | 우리 `preorder_token`. 1~100자 |
-| `externalNumber` | string | 조건부 | Mock 이 발급한 번호. 1~100자 |
+| `externalKey` | string | 조건부 | 우리 `preorder_token`. 영문 · 숫자 · `. _ -` 1~100자 |
+| `externalNumber` | string | 조건부 | Mock 이 발급한 번호. 영문 · 숫자 · `. _ -` 1~100자 |
 | `reason` | string | 선택 | `USER_CANCEL` · `ADMIN_CANCEL` · `DEADLINE_EXCEEDED` · `RETRY_EXHAUSTED` · `GHOST_COMPENSATION` 등. **저장하지 않는다** (ERD 에 칸 없음) |
 
 ```json
@@ -866,3 +883,5 @@ Accept: application/json
 | 400 | `INVALID_REQUEST` | `confirm` 누락 또는 값 불일치 |
 
 전체 초기화다. ERD 에 실행 범위 칸이 없어 범위를 나눠 지울 수 없다. 부하 시험을 반복할 때는 매 실행 전에 이걸 부르는 흐름이 된다.
+
+**본 서비스의 외부 번호도 함께 비운다.** Mock 만 지우면 전에 준 번호가 다시 나올 수 있고, 본 서비스는 번호를 UNIQUE 로 저장한다. 겹칠 확률은 실행마다 쌓인다 — 같은 날 5,000건씩 14번 돌린 뒤 15번째 실행에서 하나라도 겹칠 확률이 약 3.4% 다.

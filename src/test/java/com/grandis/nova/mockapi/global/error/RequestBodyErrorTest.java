@@ -81,6 +81,39 @@ class RequestBodyErrorTest {
                 .andExpect(jsonPath("$.errorMessage").value("요청 본문을 읽을 수 없습니다."));
     }
 
+    /** 같은 필드가 두 번 오면 마지막 값을 쓰지 않고 거절한다. 어느 값이 맞는지 Mock 이 고를 수 없다. */
+    @Test
+    @DisplayName("같은 필드 두 번 - 필드 이름을 알려준다")
+    void duplicateField() throws Exception {
+        send("""
+                {"count":1,"count":2,"mode":"TIMEOUT"}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errorMessage").value("count 필드가 두 번 왔습니다."));
+    }
+
+    /** 문자열 숫자 · 실수 · 빈 문자열을 정수로 바꿔 받지 않는다. 바꿔 주면 워커의 타입 오류가 묻힌다. */
+    @Test
+    @DisplayName("정수 자리에 문자열 · 실수 · 빈 문자열 - 바꿔 받지 않고 400")
+    void noCoercionToInteger() throws Exception {
+        for (String count : new String[]{"\"1\"", "1.9", "\"\""}) {
+            send("""
+                    {"count":%s,"mode":"TIMEOUT"}""".formatted(count))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorMessage").value("count 값의 형식이 올바르지 않습니다."));
+        }
+    }
+
+    /** 숫자를 열거형 순번으로 읽으면 1 이 조용히 TIMEOUT 이 된다. */
+    @Test
+    @DisplayName("열거형 자리에 숫자 - 순번으로 읽지 않고 허용값을 알려준다")
+    void noEnumByIndex() throws Exception {
+        send("""
+                {"count":1,"mode":1}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorMessage", containsString("mode 은(는) HTTP_5XX, TIMEOUT 중 하나여야 합니다.")));
+    }
+
     record ProbeBody(Integer count, FailureMode mode) {
     }
 

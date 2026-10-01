@@ -3,7 +3,7 @@ package com.grandis.nova.mockapi.registration.api;
 /**
  * 예약 취소 요청. 키와 번호 중 하나 이상이 있어야 한다.
  *
- * <p>"둘 중 하나 이상" 과 길이(1~100자)는 컨트롤러가 검사한다({@code Identifiers} 참고). 컨트롤러에
+ * <p>"둘 중 하나 이상" 과 형식(영문 · 숫자 · {@code . _ -} 1~100자)은 컨트롤러가 검사한다({@code Identifiers} 참고). 컨트롤러에
  * {@code @Valid} 가 붙어 있으므로 나중에 필드를 더하며 검증 애너테이션을 달아도 그대로 먹는다.
  *
  * @param externalKey    우리 {@code preorder_token}

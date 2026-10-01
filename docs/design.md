@@ -27,8 +27,9 @@ cross-database 조회나 물리 FK 를 두지 않는다. 재기동해도 등록 
 com.grandis.nova.mockapi/
 ├── global/
 │   ├── chaos/      설정 스냅샷 · 지연·실패 주입 · 결함
-│   ├── config/     MockProperties (지연 평균·지터·실패율·타임아웃 유지 시간 기본값) · 모르는 필드 거절
-│   └── error/      오류 코드 · 응답 형식 · 예외 핸들러
+│   ├── config/     MockProperties (지연 평균·지터·실패율·타임아웃 유지 시간 기본값) · 엄격한 JSON(모르는 필드 · 값이 바뀌는 타입 변환 · 중복 필드 거절, 정수 → 실수만 받음) · 응답 시각 형식
+│   ├── error/      오류 코드 · 응답 형식 · 예외 핸들러
+│   └── validation/ 키 · 번호 형식 규칙(Identifiers) — 등록 파트가 쓴다(제어 파트의 결함 키는 아래 참고)
 ├── registration/   등록 원장 — 등록 · 조회 · 취소 · 멱등 판정 · 채번
 │   ├── api/          컨트롤러 · 요청·응답 DTO · 키 길이 검사
 │   ├── application/  처리 순서 · 트랜잭션 경계 — Service · Writer · Reader · 중복 키 재시도
@@ -45,8 +46,9 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 `control` 에는 자기 테이블이 없어 `domain` 이 없다 — 설정 · 결함 보관소는 등록 파트와의 계약이라
 `global/chaos` 에 있고, 초기화가 지우는 것은 등록 원장이다.
 
-층 밖에서 쓰지 않는 클래스는 package-private 으로 숨긴다(`DuplicateKeyRetry` · `DuplicateKey` ·
-`Identifiers`). 같은 층끼리만 쓰므로 나눠도 숨김이 유지된다.
+층 밖에서 쓰지 않는 클래스는 package-private 으로 숨긴다(`DuplicateKeyRetry` · `DuplicateKey`). 같은 층끼리만
+쓰므로 나눠도 숨김이 유지된다. 키 형식 규칙(`Identifiers`)은 제어 파트도 결함을 거는 키에 써야 해서
+`global/validation` 에 공개로 둔다. 결함 키는 아직 길이만 보고(`FaultRequest`), 제어 API 정리 때 이 규칙으로 맞춘다.
 
 지연·실패 주입은 **등록 처리 안에서** 부른다. 필터에 두면 조회·취소에도 걸리는데, 과제가 취소를
 "항상 성공" 으로 가정하고 정합성 조회까지 느려지기 때문이다.
