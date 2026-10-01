@@ -29,6 +29,12 @@ public enum ErrorCode {
     KEY_PAYLOAD_MISMATCH(HttpStatus.UNPROCESSABLE_CONTENT, "같은 키로 다른 내용이 요청되었습니다.", false),
 
     /**
+     * 진행 중인 등록 · 취소가 있어 초기화를 거절했다. 그대로 지우면 지연 중이던 등록이 초기화 뒤에 커밋되어,
+     * 취소한 키가 ACTIVE 로 살아난다. 제어 API 의 응답이라 워커는 받지 않는다. 끝난 뒤 다시 부르면 된다.
+     */
+    RESET_BUSY(HttpStatus.CONFLICT, "진행 중인 등록 · 취소가 있어 초기화할 수 없습니다.", false),
+
+    /**
      * 일시 실패. 주입 실패 말고도 중복 키 재시도 상한 초과 · 처리하지 못한 오류가 이 코드로 나간다.
      * 워커에게는 모두 같은 일시 실패이고, 부하 시험은 {@code errorMessage} 로 셋을 구분한다(명세 오류 분류 계약).
      */

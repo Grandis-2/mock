@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.control.api;
 
+import com.grandis.nova.mockapi.control.application.ResetBarrier;
 import com.grandis.nova.mockapi.control.application.ResetService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,14 +25,21 @@ import org.springframework.web.bind.annotation.RestController;
 public class ResetController {
 
     private final ResetService service;
+    private final ResetBarrier barrier;
 
-    public ResetController(ResetService service) {
+    public ResetController(ResetService service, ResetBarrier barrier) {
         this.service = service;
+        this.barrier = barrier;
     }
 
-    /** 전체 초기화다. ERD 에 실행 범위 칸이 없어 범위를 나눠 지울 수 없다. */
+    /**
+     * 전체 초기화다. ERD 에 실행 범위 칸이 없어 범위를 나눠 지울 수 없다.
+     *
+     * <p>진행 중인 등록 · 취소가 있으면 409 로 거절한다. 장벽은 여기서 감싼다 — 서비스의 트랜잭션이
+     * 커밋될 때까지 잠금을 쥐고 있어야 그사이 새 등록이 끼어들지 못한다.
+     */
     @PostMapping
     public ResetResponse reset(@Valid @RequestBody ResetRequest request) {
-        return new ResetResponse(service.reset());
+        return new ResetResponse(barrier.exclusively(service::reset));
     }
 }
