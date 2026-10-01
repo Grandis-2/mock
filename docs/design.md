@@ -69,8 +69,11 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 같은 새 키로 등록과 취소가 동시에 들어오면 한쪽이 중복 키(1062)를 받는다. **오류가 아니라
 정상 분기다** — 그 트랜잭션은 롤백 전용이 되므로 트랜잭션을 나와 새로 3단계부터 한다. 행이 없을
 때는 잠금이 걸리지 않고(READ COMMITTED 에는 갭 락이 없다) INSERT 에서 직렬화되는 것이 전제라,
-`application.yml` 과 `compose.yaml` 양쪽에서 격리 수준을 READ COMMITTED 로 지정한다. 교착(1213)은
-재시도하지 않고 500 으로 낸다. 저장된 것이 없고 워커가 by-key 로 확인한 뒤 다시 보낸다.
+**격리 수준은 트랜잭션 경계에 선언한다** — `RegistrationWriter.attemptOnce` · `CancellationWriter.cancelOnce` ·
+`RegistrationReader.findByKey` 의 `@Transactional(isolation = READ_COMMITTED)`. 설정 파일에만 두면 사본을
+놓친 사람과 RDS(기본 REPEATABLE READ)에서 빠지고, 그러면 서로 다른 새 키의 동시 등록도 갭 락끼리 막혀
+교착한다(리뷰 재현: 동시 50건 × 5회 중 85% 가 500). 그래서 동시성 시험은 서버를 RR 그대로 두고 돈다.
+교착(1213)은 재시도하지 않고 500 으로 낸다. 저장된 것이 없고 워커가 by-key 로 확인한 뒤 다시 보낸다.
 
 키 조회(by-key)는 **공유 잠금(`FOR SHARE`)** 으로 읽는다. 진행 중인 등록이 커밋될 때까지 기다려야
 트랜잭션 안의 등록을 놓치지 않는다. 지연은 락 밖이라 등록 지연을 크게 잡아도 키 조회가 그만큼

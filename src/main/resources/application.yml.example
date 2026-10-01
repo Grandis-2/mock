@@ -19,7 +19,8 @@ spring:
     username: nova
     password: nova
     hikari:
-      # 빠뜨리면 오류가 나지 않는다. 부하가 걸릴 때까지 아무도 모른다.
+      # 등록 · 취소 · 키 조회는 코드가 트랜잭션마다 READ COMMITTED 를 정한다(design.md).
+      # 여기 값은 그 밖의 쿼리(초기화 등)의 기본값이다.
       transaction-isolation: TRANSACTION_READ_COMMITTED
       # 20 은 500 RPS 에서 병목이었다. 요청이 커넥션을 기다리며 쌓여 최대 동시가 이론값의
       # 1.6배(baseline 관측 480 / 이론 ~300)까지 올라갔고 p95 오버헤드가 464ms 였다.
