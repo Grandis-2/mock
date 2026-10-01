@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.global.error;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.multipart.MultipartException;
 
 /**
  * 잘못된 요청이 500 으로 나가지 않는지 본다.
@@ -127,6 +129,29 @@ class GlobalExceptionHandlerTest {
     }
 
     /**
+     * 오류 응답은 Accept 와 협상하지 않는다. 협상에 맡기면 JSON 을 못 써 컨테이너가 본문 없는 오류를 내고,
+     * 409 같은 확정 거절이 본문 없는 500(재시도 대상)으로 뒤집힌다.
+     */
+    @Test
+    @DisplayName("Accept: text/plain 이어도 오류 본문은 JSON 으로 나간다")
+    void errorBodyIgnoresAccept() throws Exception {
+        mvc.perform(get("/probe/boom").accept(MediaType.TEXT_PLAIN))
+                .andExpect(status().isInternalServerError())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"));
+    }
+
+    /** 경계 없는 multipart 는 핸들러를 찾기 전에 나서 매핑의 consumes 로 막을 수 없다. */
+    @Test
+    @DisplayName("multipart 를 나누지 못하면 400")
+    void multipartIsBadRequest() throws Exception {
+        mvc.perform(get("/probe/multipart"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errorMessage", containsString("Content-Type")));
+    }
+
+    /**
      * 부하 클라이언트를 도중에 강제 종료하면 응답을 쓰다 이 예외들이 난다(한 번에 수백 건).
      * catch-all 로 떨어지면 서버 버그와 같은 문구로 찍히고, 끊긴 연결에 500 을 또 쓰려 한다.
      */
@@ -153,6 +178,9 @@ class GlobalExceptionHandlerTest {
         String get(@PathVariable @Size(min = 1, max = 100) String key) {
             if ("boom".equals(key)) {
                 throw new IllegalStateException("Mock 내부 오류");
+            }
+            if ("multipart".equals(key)) {
+                throw new MultipartException("Failed to parse multipart servlet request");
             }
             return key;
         }
