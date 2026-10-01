@@ -145,7 +145,7 @@ class LoadReportTest {
         LoadPlan plan = LoadPlan.classify(URL, 100);
 
         Verdict verdict = report.judge(plan, facts);
-        String rendered = report.render(plan, "{}", 1, facts, 0.0, 300, Duration.ofSeconds(11), verdict);
+        String rendered = report.render(plan, "{}", 1, facts, 0.0, 300, Duration.ofSeconds(11), verdict, "판정");
 
         assertThat(verdict.result()).isEqualTo(Verdict.Result.INVALID);
         assertThat(rendered).contains("판정 불가").contains("원장을 읽지 못했다").contains("Communications link failure");

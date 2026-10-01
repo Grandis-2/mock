@@ -61,7 +61,11 @@ public final class LoadTestMain {
     private LoadTestMain() {
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] rawArgs) throws Exception {
+        // --warmup 은 어디에 붙여도 된다. 예열 실행은 결과를 버리므로 보고서에 그렇게 적고, 판정과 상관없이 0 으로 끝낸다
+        // (식은 JVM 이라 FAIL 이 나는 게 정상이다 — 스크립트가 거기서 멈추면 안 된다).
+        boolean warmup = java.util.Arrays.asList(rawArgs).contains("--warmup");
+        String[] args = java.util.Arrays.stream(rawArgs).filter(a -> !"--warmup".equals(a)).toArray(String[]::new);
         String baseUrl = args.length > 0 ? args[0] : DEFAULT_BASE_URL;
         String scenario = args.length > 1 ? args[1] : "baseline";
         String pass = args.length > 2 ? args[2] : "classify";
@@ -127,21 +131,21 @@ public final class LoadTestMain {
                 runner.maxLaunchLag(), db, dbError, canary);
         Verdict verdict = runner.report().judge(plan, facts);
         String report = runner.report().render(plan, configBody, configVersion, facts, heldFraction,
-                runner.maxInFlight(), elapsed, verdict);
+                runner.maxInFlight(), elapsed, verdict, warmup ? "예열 (결과를 버린다)" : "판정");
         System.out.println();
         System.out.println(report);
 
-        // 파일 이름에 패스를 넣는다. 같은 시나리오를 두 패스로 돌리면 이름만으로 어느 쪽인지 갈라야 한다.
+        // 파일 이름에 패스와 예열 여부를 넣는다. 이름만으로 어느 실행인지 갈라야 판정 15회를 골라낼 수 있다.
         Path out = Path.of("build", "load",
-                "report-" + scenario + "-" + pass + "-"
+                (warmup ? "warmup-" : "report-") + scenario + "-" + pass + "-"
                         + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
                         + ".md");
         Files.createDirectories(out.getParent());
         Files.writeString(out, report);
         System.out.println("보고서: " + out.toAbsolutePath());
-        System.out.println("판정: " + verdict.result().label());
-        // 스크립트로 여러 번 돌릴 때 보고서를 열지 않고 거른다. PASS 0 · FAIL 1 · 판정 불가 2.
-        System.exit(verdict.result().exitCode());
+        System.out.println((warmup ? "예열 (참고) " : "") + "판정: " + verdict.result().label());
+        // 스크립트로 여러 번 돌릴 때 보고서를 열지 않고 거른다. PASS 0 · FAIL 1 · 판정 불가 2. 예열은 늘 0.
+        System.exit(warmup ? 0 : verdict.result().exitCode());
     }
 
     /**

@@ -412,15 +412,19 @@ public final class LoadReport {
      * @param maxInFlight   동시에 떠 있던 요청의 최대치. 서버 쪽 커넥션 수의 대용값이다
      * @param elapsed       첫 발사부터 마지막 응답까지
      */
+    /**
+     * @param runLabel 이 실행이 판정인지 예열인지. 예열은 결과를 버리므로 제목에 밝힌다 — 보고서만 보고 판정 15회를
+     *                 골라낼 수 있어야 한다
+     */
     public String render(LoadPlan plan, String configBody, int configVersion, Facts facts,
-                         double heldFraction, int maxInFlight, Duration elapsed, Verdict verdict) {
+                         double heldFraction, int maxInFlight, Duration elapsed, Verdict verdict, String runLabel) {
         InjectedLatency injected = facts.injected();
         Duration launchLag = facts.launchLag();
         RegistrationSnapshot db = facts.db();
         Map<Outcome, Integer> counts = byOutcome();
         StringBuilder out = new StringBuilder();
 
-        out.append("# 부하 시험 결과\n\n");
+        out.append("# 부하 시험 결과 — ").append(runLabel).append(" · ").append(plan.pass()).append("\n\n");
         appendVerdict(out, verdict);
         boolean targetLoad = plan.targetLoadAchieved(launchLag);
         if (!targetLoad) {
@@ -448,7 +452,7 @@ public final class LoadReport {
         out.append("> 응답 타임아웃 ").append(plan.responseTimeout().toSeconds())
                 .append("초는 ")
                 .append(plan.pass() == LoadPlan.Pass.CLASSIFY
-                        ? "워커 읽기 타임아웃 가정값이다(명세 기재값. 실제 값을 받으면 다시 돌린다)."
+                        ? "워커 읽기 타임아웃이다(be worker read-timeout 5s · api.md 계약). 워커가 겪을 결과를 센다."
                         : "백분위가 잘리지 않게 넉넉히 둔 값이다. 분류는 참고로만 본다.")
                 .append("\n\n");
 
@@ -464,6 +468,10 @@ public final class LoadReport {
         out.append("## 적용한 Mock 설정 (요구사항 5.4)\n\n");
         out.append("| 항목 | 값 |\n| --- | --- |\n");
         out.append("| configVersion | ").append(configVersion).append(" |\n");
+        out.append("| 지연 평균 · 지터 | ").append(injected.describe()).append(" |\n");
+        out.append("| 유지 시간 · 워커 타임아웃 | ").append(field(configBody, "timeoutHoldMs")).append("ms · ")
+                .append(field(configBody, "workerReadTimeoutMs")).append("ms |\n");
+        out.append("| 커넥션 풀 | 클라이언트에서 볼 수 없다 — Mock 의 `maximum-pool-size` 를 함께 적는다(합의값 30) |\n");
         out.append("| 설정 전문 | `").append(configBody).append("` |\n\n");
 
         out.append("## 조건 (2026-09-28 합의)\n\n");
@@ -472,7 +480,7 @@ public final class LoadReport {
         out.append("| 요청 규모 | ").append(plan.totalRequests()).append("건 | 과제 예시 |\n");
         out.append("| 발생 구간 | ").append(plan.rampUp()).append(" | 균등 발사 |\n");
         out.append("| 응답 타임아웃 | ").append(plan.responseTimeout()).append(" | ")
-                .append(plan.pass() == LoadPlan.Pass.CLASSIFY ? "워커 가정값" : "잘린 분포 방지")
+                .append(plan.pass() == LoadPlan.Pass.CLASSIFY ? "워커 읽기 타임아웃" : "잘린 분포 방지")
                 .append(" |\n");
         out.append("| 관찰 종료 조건 | 발사 후 ").append(plan.drainTimeout())
                 .append(" | 응답 타임아웃보다 길어야 한다 (코드가 강제) |\n");
@@ -708,6 +716,12 @@ public final class LoadReport {
         out.append(observed.toMillis()).append("ms | ").append(overheadMs).append("ms | ")
                 .append(target.toMillis()).append("ms | ")
                 .append(overheadMs <= target.toMillis() ? "이내" : "초과").append(" |\n");
+    }
+
+    /** 설정 응답에서 숫자 필드 하나. 예전 Mock 처럼 필드가 없으면 "?" — 어떤 조건이었는지 모른다는 표시다. */
+    private static String field(String configBody, String name) {
+        var matcher = java.util.regex.Pattern.compile("\"" + name + "\"\\s*:\\s*([0-9.]+)").matcher(configBody);
+        return matcher.find() ? matcher.group(1) : "?";
     }
 
     private static String percent(double ratio) {
