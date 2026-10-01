@@ -308,8 +308,19 @@ spring.datasource.hikari.maximum-pool-size: 30
 20 은 500 RPS 에서 병목이었다. 요청이 커넥션을 기다리며 쌓여 결과 불명이 나왔고(1차 11.2% · 2차 0%),
 불명이 없는 회차도 p95 오버헤드가 464ms 였다. 30 부터 70~99ms 로 떨어지고 50 과 차이가 없다.
 
-JDBC 주소 끝의 **`useLocalSessionState=true` 도 확인한다**(예시 파일에 있다). 빠지면 트랜잭션마다 격리 수준을 묻는
-`SELECT` 가 하나 더 나가 풀의 여유가 줄고, 자리 잡은 뒤에도 오버헤드가 325 · 541ms 로 튀었다(있으면 66 ~ 72ms).
+**MySQL 커밋 동기화가 완화돼 있는지 확인한다.** `compose.yaml` 이 `--innodb-flush-log-at-trx-commit=2
+--sync-binlog=0` 으로 띄운다. 예전에 만든 컨테이너면 `docker compose up -d` 로 다시 만든다(데이터 볼륨은 남는다).
+
+```bash
+docker exec nova-mock-mysql mysql -unova -pnova -N -e "select @@innodb_flush_log_at_trx_commit, @@sync_binlog"   # 2 0
+```
+
+기본값(1 · 1)으로 돌리면 Docker Desktop 디스크에서 COMMIT 이 평균 29ms · p99 200ms 까지 걸려 풀이 막히고, 결과 불명이
+수천 건 나온다 — 판정이 Mock 이 아니라 디스크를 잰다(load-test.md "재판정에서 드러난 것"). 보고서의 실행 조건에도 이
+설정이 찍히니 거기서 확인할 수 있다. **판정용 로컬 MySQL 에만 해당하고 RDS 는 기본값 그대로다.**
+
+JDBC 주소 끝의 `useLocalSessionState=true` 도 둔다(예시 파일에 있다). 트랜잭션마다 격리 수준을 묻는 `SELECT` 를 없앤다.
+판정을 흔든 원인은 아니었지만 비용 없이 명령 하나를 줄인다.
 
 **순서를 지켜야 한다.** 시나리오 × 패스 조합마다 이렇게 돈다.
 
@@ -326,9 +337,8 @@ JDBC 주소 끝의 **`useLocalSessionState=true` 도 확인한다**(예시 파�
 | latency | `baseline` · `latency` |
 
 - **예열은 시나리오마다 2회 한다.** `baseline` 만 예열하고 `latency` 를 돌리면 첫 회차가 튄다 — 재기동
-  직후 첫 `latency` 가 결과 불명 91.9% 였고, `latency` 를 따로 예열한 뒤에는 0% 였다. 한 PC 에서 돌리면
-  **기동 직후 · 시나리오가 바뀐 직후 2회까지** CPU 가 99 ~ 100% 로 차며 흔들린다(2026-10-01 재판정). 1회로는
-  모자랐다
+  직후 첫 `latency` 가 결과 불명 91.9% 였고, `latency` 를 따로 예열한 뒤에는 0% 였다. 커밋 동기화를 완화해도
+  기동 직후 첫 예열은 p95 112ms 로 느렸다(JIT). 2회면 넉넉하다
 - **판정마다 초기화한다.** 앞 실행의 행이 남으면 "우리 키가 아닌 행" 으로 잡혀 판정이 실패한다
 - **`timeout` 뒤에는 초기화 전에 몇 초 기다린다.** Mock 은 유지 시간(7초)까지 요청을 쥐고 있어서,
   클라이언트가 5초에 포기한 직후 최대 2초는 초기화가 409 `RESET_BUSY` 다. 받으면 잠시 뒤 다시 부른다
