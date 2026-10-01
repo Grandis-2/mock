@@ -188,6 +188,26 @@ class MockConfigApiTest {
                 .andExpect(jsonPath("$.latencyJitter").value(properties.latencyJitter()));
     }
 
+    /** 부하 보고서가 "어떤 조건의 Mock 이었나" 를 남기려고 읽는다. 설정 파일로만 정하는 값이다. */
+    @Test
+    @DisplayName("조회 응답에 유지 시간과 워커 타임아웃이 함께 나간다 — 읽기 전용")
+    void exposesHoldAndWorkerTimeout() throws Exception {
+        mvc.perform(get(PATH))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.timeoutHoldMs").value(properties.timeoutHoldMs()))
+                .andExpect(jsonPath("$.workerReadTimeoutMs").value(properties.workerReadTimeoutMs()));
+
+        var before = store.applied();
+        mvc.perform(put(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"registerLatencyMs":500,"failureRate":0.05,"workerReadTimeoutMs":9000}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorMessage",
+                        containsString("workerReadTimeoutMs 은(는) 알 수 없는 필드입니다.")));
+        assertThat(store.applied()).isEqualTo(before);
+    }
+
     /**
      * 지터는 설정 파일로만 정한다. 실행 중에 바꿀 수 있으면 등록 파트와의 계약인 {@code ConfigSnapshot}
      * 이 늘어나고, 부하 판정 도중 분포가 바뀌면 주입한 몫을 빼낼 수 없다.
