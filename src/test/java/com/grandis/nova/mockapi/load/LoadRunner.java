@@ -106,7 +106,7 @@ public final class LoadRunner {
     }
 
     /**
-     * 계획한 시각까지 기다렸다가 보낸다. 늦었으면 바로 보내고 <b>얼마나 늦었는지 남긴다.</b>
+     * 계획한 시각까지 기다렸다가 보낸다. 늦었든 늦게 깨어났든 <b>예정보다 얼마나 늦게 보냈는지 남긴다.</b>
      *
      * <p>이 시험은 5,000건을 10초에 고르게 쏘는 것이 전제다. 발사가 몇 초씩 밀렸다면 그 실행은
      * <b>목표 부하를 만들지 못한 것</b>이고, 요구사항 8장은 그런 시험을 성능 합격으로 판정하지
@@ -114,9 +114,7 @@ public final class LoadRunner {
      */
     private void sendAt(Instant startedAt, long dueNanos, String key) {
         long waitNanos = dueNanos - Duration.between(startedAt, Instant.now()).toNanos();
-        if (waitNanos <= 0) {
-            trackLag(-waitNanos);
-        } else {
+        if (waitNanos > 0) {
             try {
                 Thread.sleep(Duration.ofNanos(waitNanos));
             } catch (InterruptedException e) {
@@ -125,11 +123,16 @@ public final class LoadRunner {
                 return;
             }
         }
+        // 잠든 뒤에도 잰다. 예정 시각까지 잠들었다가 PC 가 멈칫해 몇 초 늦게 깨어나면, 처음부터 늦은 경우만
+        // 보던 예전 방식으로는 기록되지 않았다(리뷰 H3 ②). 깨어난 지금이 예정보다 얼마나 늦었는지가 발사 지연이다.
+        trackLag(Duration.between(startedAt, Instant.now()).toNanos() - dueNanos);
         send(key);
     }
 
-    private void trackLag(long lagNanos) {
-        maxLaunchLagNanos.updateAndGet(previous -> Math.max(previous, lagNanos));
+    /** 음수(예정보다 일찍 깸)는 0 으로 본다. 최대치만 남긴다 — 한 번이라도 크게 밀렸으면 그 실행은 무효다. */
+    void trackLag(long lagNanos) {
+        long lag = Math.max(lagNanos, 0);
+        maxLaunchLagNanos.updateAndGet(previous -> Math.max(previous, lag));
     }
 
     private void send(String key) {
