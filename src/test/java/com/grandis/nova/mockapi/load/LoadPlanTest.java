@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.load;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -13,30 +14,37 @@ class LoadPlanTest {
 
     private static final String URL = "http://localhost:8081";
 
-    /** 지금 `latency` 시나리오다. 최대 2100 + 허용 400 = 2500 < 3000. */
+    /** be 워커 read-timeout 5s 와 같아야 워커가 겪을 결과를 센다(docs/api.md). */
     @Test
-    @DisplayName("평균 1500 · 지터 0.4 는 분류 판정(3초)에 들어간다")
+    @DisplayName("분류 판정의 응답 타임아웃은 워커 읽기 타임아웃 5초다")
+    void classifyMatchesWorkerTimeout() {
+        assertThat(LoadPlan.classify(URL, 5_000).responseTimeout()).isEqualTo(Duration.ofSeconds(5));
+    }
+
+    /** 지금 `latency` 시나리오다. 최대 2100 + 허용 400 = 2500 < 5000. */
+    @Test
+    @DisplayName("평균 1500 · 지터 0.4 는 분류 판정(5초)에 들어간다")
     void latencyScenarioFits() {
         assertThat(LoadPlan.classify(URL, 5_000).leavesRoomFor(new InjectedLatency(1500, 0.4))).isTrue();
     }
 
-    /** 바꾸기 전 `latency` 시나리오. 최대 2800 + 허용 400 = 3200 > 3000. */
+    /** 3초를 가정하던 때는 걸쳤다(2800 + 400 = 3200 > 3000). 5초에서는 3200 < 5000. */
     @Test
-    @DisplayName("평균 2000 · 지터 0.4 는 분류 판정(3초)에 걸친다")
-    void twoSecondsWithJitterOverflows() {
-        assertThat(LoadPlan.classify(URL, 5_000).leavesRoomFor(new InjectedLatency(2000, 0.4))).isFalse();
+    @DisplayName("평균 2000 · 지터 0.4 는 분류 판정(5초)에 들어간다 — 3초 가정 때는 걸쳤다")
+    void twoSecondsWithJitterNowFits() {
+        assertThat(LoadPlan.classify(URL, 5_000).leavesRoomFor(new InjectedLatency(2000, 0.4))).isTrue();
     }
 
-    /** 평균화 이전 Mock(고정 2000) 은 들어갔다. 이번 변경이 그 판정을 깨지 않는지. */
+    /** 최대 4900 + 허용 400 = 5300 > 5000. 운영 가이드의 "평균 3,500ms 이상" 과 같은 경계다. */
     @Test
-    @DisplayName("고정 2000 은 분류 판정(3초)에 들어간다 — 이전 판정과 같은 조건")
-    void fixedTwoSecondsFits() {
-        assertThat(LoadPlan.classify(URL, 5_000).leavesRoomFor(new InjectedLatency(2000, 0.0))).isTrue();
+    @DisplayName("평균 3500 · 지터 0.4 는 분류 판정(5초)에 걸친다")
+    void threeAndHalfSecondsOverflows() {
+        assertThat(LoadPlan.classify(URL, 5_000).leavesRoomFor(new InjectedLatency(3500, 0.4))).isFalse();
     }
 
     @Test
-    @DisplayName("지연 판정(10초)은 평균 2000 · 지터 0.4 도 들어간다")
+    @DisplayName("지연 판정(10초)은 평균 3500 · 지터 0.4 도 들어간다")
     void latencyPassHasRoom() {
-        assertThat(LoadPlan.latency(URL, 5_000).leavesRoomFor(new InjectedLatency(2000, 0.4))).isTrue();
+        assertThat(LoadPlan.latency(URL, 5_000).leavesRoomFor(new InjectedLatency(3500, 0.4))).isTrue();
     }
 }

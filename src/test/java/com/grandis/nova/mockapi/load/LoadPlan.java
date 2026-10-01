@@ -48,7 +48,7 @@ public record LoadPlan(
         /**
          * 분류 판정. 응답 타임아웃을 <b>워커 읽기 타임아웃</b>에 맞춘다.
          *
-         * <p>{@code timeout} 시나리오도 이 패스에서 돌린다. 유지 5초 &gt; 타임아웃 3초라
+         * <p>{@code timeout} 시나리오도 이 패스에서 돌린다. 유지 7초 &gt; 타임아웃 5초라
          * {@code mock.timeout-hold-ms} 를 건드리지 않고 결과 불명이 나온다. 타임아웃을 유지 시간보다
          * 크게 잡으면 붙잡던 연결이 끝나며 나가는 500 을 받아 <b>결과 불명이 일시 실패로 세어진다.</b>
          */
@@ -59,12 +59,13 @@ public record LoadPlan(
     }
 
     /**
-     * 워커 HTTP 읽기 타임아웃 <b>가정값</b>. 명세 기재값이고 실제 값은 아직 받지 못했다.
+     * 워커 HTTP 읽기 타임아웃. be 워커 설정(read-timeout: 5s)이고 docs/api.md 계약에 적혀 있다.
      *
-     * <p>이 값이 정해지면 여기와 {@code mock.timeout-hold-ms}(= 이 값 + 2초)를 함께 옮기고
-     * 패스 A 를 다시 돌린다. 코드는 바뀌지 않는다.
+     * <p>Mock 의 {@code mock.worker-read-timeout-ms} 와 같은 값이다. 바뀌면 여기와 Mock 의 그 값,
+     * {@code mock.timeout-hold-ms}(이 값 + 2초 이상)를 함께 옮기고 분류 판정을 다시 돌린다.
+     * 3초 가정으로 돌던 때가 있었고, 그때 판정(2026-09-28)은 이 값이 아니다.
      */
-    public static final Duration ASSUMED_WORKER_READ_TIMEOUT = Duration.ofSeconds(3);
+    public static final Duration WORKER_READ_TIMEOUT = Duration.ofSeconds(5);
 
     /**
      * <b>관찰 종료 조건은 요청 하나의 응답 타임아웃보다 길어야 한다.</b> 짧으면 아직 자기 타임아웃이
@@ -79,12 +80,12 @@ public record LoadPlan(
         }
     }
 
-    /** 분류를 판정하는 실행. 응답 타임아웃을 워커 가정값에 맞춘다. */
+    /** 분류를 판정하는 실행. 응답 타임아웃을 워커 읽기 타임아웃에 맞춘다. */
     public static LoadPlan classify(String baseUrl, int totalRequests) {
-        return agreed(Pass.CLASSIFY, baseUrl, totalRequests, ASSUMED_WORKER_READ_TIMEOUT);
+        return agreed(Pass.CLASSIFY, baseUrl, totalRequests, WORKER_READ_TIMEOUT);
     }
 
-    /** 지연을 판정하는 실행. 설정 지연 2000ms 에 충분한 여유를 두려고 10초로 잡는다. */
+    /** 지연을 판정하는 실행. 주입 지연이 가장 길게 뽑혀도(평균 1500 → 최대 2100ms) 잘리지 않게 10초로 잡는다. */
     public static LoadPlan latency(String baseUrl, int totalRequests) {
         return agreed(Pass.LATENCY, baseUrl, totalRequests, Duration.ofSeconds(10));
     }
@@ -126,9 +127,9 @@ public record LoadPlan(
      * Mock 의 결과가 아니라 <b>시나리오 설계가 타임아웃에 걸친 것</b>이다. 분류 판정은 결과 불명
      * 허용이 0 이라 그대로 실패로 찍힌다.
      *
-     * <p>지연이 평균으로 바뀌면서(NV-121) 생긴 조건이다. 평균 2000ms · 지터 0.4 면 주입 최대가
-     * 2800ms 라, p99 허용 오버헤드 400ms 를 더하면 3초 타임아웃을 넘는다. 워커 타임아웃 실제 값이
-     * 오면 또 바뀌므로 사람이 기억하게 두지 않고 여기서 검사한다.
+     * <p>지연이 평균으로 바뀌면서(NV-121) 생긴 조건이다. 워커 타임아웃 5초에서는 평균 3500ms · 지터 0.4
+     * 면 주입 최대가 4900ms 라, p99 허용 오버헤드 400ms 를 더하면 넘는다(3초를 가정하던 때는 평균 2000ms
+     * 부터 넘었다). 워커 타임아웃이 바뀌면 또 바뀌므로 사람이 기억하게 두지 않고 여기서 검사한다.
      *
      * <p>p99 허용치로 보는 이유 — 넘치는 건 꼬리의 요청들이다.
      */

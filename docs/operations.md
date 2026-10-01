@@ -265,7 +265,7 @@ curl -X POST localhost:8081/external/reset -H 'Content-Type: application/json' \
 | | 값 |
 | --- | --- |
 | 시나리오 | `baseline` · `latency` · `timeout` |
-| 패스 | `classify`(분류 판정 · 타임아웃 3초) · `latency`(지연 판정 · 10초) |
+| 패스 | `classify`(분류 판정 · 타임아웃 5초 = 워커 읽기 타임아웃) · `latency`(지연 판정 · 10초) |
 | 건수 | 생략하면 합의값 5,000 |
 | JDBC | 생략하면 `localhost:3307`. **부하를 쏘는 장비가 Mock 과 다르면 반드시 넣는다** |
 
