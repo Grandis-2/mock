@@ -57,6 +57,8 @@ public class RegistrationController {
     /** 번호로 단건 조회. 등록 응답과 같은 형식이고 취소된 등록도 돌려준다. */
     @GetMapping("/{externalNumber}")
     public RegistrationResponse findByNumber(@PathVariable String externalNumber) {
+        // 형식이 틀린 번호는 400 이다. 조회까지 보내면 404 NOT_FOUND("그 기록이 없다")로 나가 뜻이 섞인다.
+        Identifiers.requireFormat("externalNumber", externalNumber);
         return RegistrationResponse.from(reader.findByNumber(externalNumber));
     }
 

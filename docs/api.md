@@ -366,17 +366,18 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 Accept: application/json
 ```
 
-| 이름 | 위치 | 타입 | 필수 |
-| --- | --- | --- | --- |
-| `externalNumber` | path | string | 필수 |
+| 이름 | 위치 | 타입 | 필수 | 제약 |
+| --- | --- | --- | --- | --- |
+| `externalNumber` | path | string | 필수 | 영문 · 숫자 · `. _ -` 1~100자 |
 
 **Body**: 없음
 
 ### 시스템 처리
 
-1. 외부 예약번호로 등록 행을 조회한다.
-2. 취소된 등록이면 `status` 를 `CANCELED` 로, `canceledAt` 을 채워 반환한다. 숨기지 않는다.
-3. 없으면 404.
+1. 번호 형식이 틀리면 400. 조회하지 않는다 — 404 `NOT_FOUND` 는 "그 기록이 없다" 에만 쓴다.
+2. 외부 예약번호로 등록 행을 조회한다.
+3. 취소된 등록이면 `status` 를 `CANCELED` 로, `canceledAt` 을 채워 반환한다. 숨기지 않는다.
+4. 없으면 404.
 
 ### Response
 
@@ -386,6 +387,7 @@ Accept: application/json
 
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | 번호 형식이 틀림 |
 | 404 | `NOT_FOUND` | 등록되지 않았습니다 |
 
 ### 확인 시나리오
