@@ -70,8 +70,14 @@ public final class LoadTestMain {
         String dbUser = args.length > 5 ? args[5] : DEFAULT_DB_USER;
         String dbPassword = args.length > 6 ? args[6] : DEFAULT_DB_PASSWORD;
 
+        // 시나리오를 걸기 전에 확인용 등록을 하나 넣는다. 끝나고 원장에서 이 키를 찾지 못하면 엉뚱한 DB 를
+        // 읽은 것이다 — JDBC 인자를 빠뜨려 빈 원장을 읽어도 timeout 시나리오의 "결과 불명 키의 행 0" 은
+        // 통과해 버린다(리뷰 H3 ⑤).
+        LoadReport.Canary canary = registerCanary(baseUrl);
         applyScenario(baseUrl, scenario);
         String configBody = get(baseUrl + CONFIG);
+        String failureMode = configBody.contains("\"failureMode\":\"TIMEOUT\"") ? "TIMEOUT" : "HTTP_5XX";
+        double failureRate = readDecimal(configBody, "failureRate", 0.0);
         int configVersion = readConfigVersion(configBody);
         // 지연은 평균값이라 요청마다 흔들린다. 흔드는 폭을 알아야 관측값에서 주입한 몫을 뺄 수 있다.
         // 평균화 이전 Mock 은 이 필드가 없으므로 0(고정)으로 본다.
@@ -80,9 +86,7 @@ public final class LoadTestMain {
                 readDecimal(configBody, "latencyJitter", 0.0));
         // TIMEOUT 모드에서 주사위에 걸린 요청은 Mock 이 응답 없이 붙잡는다. 그만큼은 클라이언트가
         // 포기할 때까지 떠 있으므로 동시 요청 상한을 계산할 때 따로 센다.
-        double heldFraction = configBody.contains("\"failureMode\":\"TIMEOUT\"")
-                ? readDecimal(configBody, "failureRate", 0.0)
-                : 0.0;
+        double heldFraction = "TIMEOUT".equals(failureMode) ? failureRate : 0.0;
 
         LoadPlan plan = switch (pass) {
             case "classify" -> LoadPlan.classify(baseUrl, requests);
@@ -107,22 +111,68 @@ public final class LoadTestMain {
         Duration elapsed = runner.run();
 
         // 클라이언트가 멈춰도 서버는 계속 처리한다. 잦아들기를 기다린 뒤 원장을 떠 온다.
+        // 조회에 실패해도 멈추지 않는다 — 보고서를 남겨야 "조회 실패" 가 "불일치 0건" 처럼 사라지지 않는다.
         System.out.println("등록 원장이 잦아들기를 기다린다... (" + jdbcUrl + ")");
-        RegistrationSnapshot db = RegistrationSnapshot.take(jdbcUrl, dbUser, dbPassword);
+        RegistrationSnapshot db = null;
+        String dbError = null;
+        try {
+            db = RegistrationSnapshot.take(jdbcUrl, dbUser, dbPassword);
+        } catch (RuntimeException e) {
+            // 드라이버 메시지는 여러 줄이라 그대로 두면 보고서의 판정 표가 깨진다. 한 줄로 편다.
+            dbError = (e.getClass().getSimpleName() + ": " + e.getMessage()).replaceAll("\\s+", " ").trim();
+            System.out.println("⚠ 원장을 읽지 못했다 — " + dbError);
+        }
 
-        String report = runner.report()
-                .render(plan, configBody, configVersion, injected, heldFraction,
-                        runner.maxInFlight(), runner.maxLaunchLag(), elapsed, db);
+        LoadReport.Facts facts = new LoadReport.Facts(failureMode, failureRate, injected,
+                runner.maxLaunchLag(), db, dbError, canary);
+        Verdict verdict = runner.report().judge(plan, facts);
+        String report = runner.report().render(plan, configBody, configVersion, facts, heldFraction,
+                runner.maxInFlight(), elapsed, verdict);
         System.out.println();
         System.out.println(report);
 
+        // 파일 이름에 패스를 넣는다. 같은 시나리오를 두 패스로 돌리면 이름만으로 어느 쪽인지 갈라야 한다.
         Path out = Path.of("build", "load",
-                "report-" + scenario + "-"
+                "report-" + scenario + "-" + pass + "-"
                         + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
                         + ".md");
         Files.createDirectories(out.getParent());
         Files.writeString(out, report);
         System.out.println("보고서: " + out.toAbsolutePath());
+        System.out.println("판정: " + verdict.result().label());
+        // 스크립트로 여러 번 돌릴 때 보고서를 열지 않고 거른다. PASS 0 · FAIL 1 · 판정 불가 2.
+        System.exit(verdict.result().exitCode());
+    }
+
+    /**
+     * 확인용 등록. 지연 · 실패를 끈 채 하나 넣고 받은 번호를 돌려준다. 실패하면 null 이고, 판정은 "판정 불가" 가 된다.
+     *
+     * <p>설정을 바꾸므로 반드시 시나리오를 걸기 전에 부른다. 이 등록은 대조에서 빠진다({@link LoadReport#CANARY_PREFIX}).
+     */
+    private static LoadReport.Canary registerCanary(String baseUrl) {
+        String key = LoadReport.CANARY_PREFIX + java.util.UUID.randomUUID();
+        try {
+            put(baseUrl + CONFIG, """
+                    {"registerLatencyMs":0,"failureRate":0.0,"failureMode":"HTTP_5XX"}""");
+            HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/external/reservations"))
+                    .header("Content-Type", "application/json")
+                    .header("Idempotency-Key", key)
+                    .timeout(Duration.ofSeconds(5))
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}"""))
+                    .build();
+            HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            var number = java.util.regex.Pattern.compile("\"externalNumber\"\\s*:\\s*\"([^\"]+)\"")
+                    .matcher(response.body());
+            if (response.statusCode() != 201 || !number.find()) {
+                System.out.println("⚠ 확인용 등록 실패 — " + response.statusCode() + " " + response.body());
+                return null;
+            }
+            return new LoadReport.Canary(key, number.group(1));
+        } catch (Exception e) {
+            System.out.println("⚠ 확인용 등록 실패 — " + e);
+            return null;
+        }
     }
 
     /**
@@ -141,8 +191,11 @@ public final class LoadTestMain {
             default -> throw new IllegalArgumentException(
                     "시나리오는 baseline · latency · timeout 중 하나여야 합니다. 받은 값: " + scenario);
         };
+        put(baseUrl + CONFIG, body);
+    }
 
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + CONFIG))
+    private static void put(String url, String body) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                 .header("Content-Type", "application/json")
                 .timeout(Duration.ofSeconds(5))
                 .PUT(HttpRequest.BodyPublishers.ofString(body))

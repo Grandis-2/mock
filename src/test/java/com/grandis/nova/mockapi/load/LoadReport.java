@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.load;
 
+import com.grandis.nova.mockapi.global.error.ErrorCode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -30,14 +31,21 @@ public final class LoadReport {
      *                       DB 에 적힌 번호와 같은지 봐야 "행은 있는데 다른 번호" 를 잡을 수 있다
      * @param injectedMs     이 요청에 Mock 이 실제로 넣은 지연({@code X-Mock-Injected-Latency-Ms}).
      *                       응답이 없거나 헤더가 없으면 null. 오버헤드는 요청마다 {@code latency − 이 값} 이다
+     * @param detail         5xx 면 응답의 {@code errorMessage}, 응답을 못 받았으면 예외 종류. 그 밖에는 null.
+     *                       같은 500 이라도 주입 실패와 Mock 의 진짜 오류(교착 등)를 가르는 데 쓴다
      */
     public record Attempt(String externalKey, String externalNumber,
-                          Outcome outcome, int status, Duration latency, Long injectedMs) {
+                          Outcome outcome, int status, Duration latency, Long injectedMs, String detail) {
 
         /** 응답을 받지 못한 요청. 주입 지연을 알 수 없다. */
         public Attempt(String externalKey, String externalNumber,
                        Outcome outcome, int status, Duration latency) {
-            this(externalKey, externalNumber, outcome, status, latency, null);
+            this(externalKey, externalNumber, outcome, status, latency, null, null);
+        }
+
+        public Attempt(String externalKey, String externalNumber,
+                       Outcome outcome, int status, Duration latency, Long injectedMs) {
+            this(externalKey, externalNumber, outcome, status, latency, injectedMs, null);
         }
     }
 
@@ -229,10 +237,170 @@ public final class LoadReport {
     }
 
     /** 우리가 보낸 키가 아닌 행. 판정 전에 초기화했으면 0 이어야 한다. */
+    /** 우리가 보낸 키가 아닌 행. 확인용 등록({@link #CANARY_PREFIX})은 우리가 넣은 것이라 세지 않는다. */
     public int foreignRows(RegistrationSnapshot db) {
-        return db.rowCount() - (int) db.numbersByKey().keySet().stream()
-                .filter(attempts::containsKey)
+        return (int) db.numbersByKey().keySet().stream()
+                .filter(key -> !attempts.containsKey(key))
+                .filter(key -> !key.startsWith(CANARY_PREFIX))
                 .count();
+    }
+
+    // ---------------------------------------------------------------- 판정
+
+    /**
+     * 주입 실패의 {@code errorMessage}(api.md 500 원인표). 같은 500 이라도 이 문구가 아니면 Mock 의 진짜 오류다 —
+     * 교착 · 재시도 상한 · 유지 시간 뒤의 빈 500. 예전에는 모두 "5%" 에 섞여 들어갔다(리뷰 H3 ④).
+     */
+    static final String INJECTED_FAILURE_MESSAGE = ErrorCode.UPSTREAM_UNAVAILABLE.defaultMessage();
+
+    /** 원장이 이 Mock 의 것인지 확인하려고 부하 직전에 넣는 등록의 키 접두사. 대조에서 뺀다. */
+    public static final String CANARY_PREFIX = "canary-";
+
+    /** 99.9% 양측 구간의 z. 실패율이 우연으로 범위를 벗어날 확률을 0.1% 로 둔다. */
+    private static final double Z_999 = 3.29;
+
+    /** 부하 직전에 넣은 확인용 등록. 끝나고 원장에 이 키 · 번호가 있어야 그 원장이 이 Mock 의 것이다. */
+    public record Canary(String key, String number) {
+    }
+
+    /**
+     * 판정에 필요한 실행 조건.
+     *
+     * @param db      원장. 조회에 실패했으면 null 이고 이유는 {@code dbError} 에 있다
+     * @param canary  확인용 등록. 넣지 못했으면 null
+     */
+    public record Facts(String failureMode, double failureRate, InjectedLatency injected,
+                        Duration launchLag, RegistrationSnapshot db, String dbError, Canary canary) {
+    }
+
+    /** 주입 실패가 아닌 5xx. 0 이어야 한다. */
+    public long nonInjectedServerErrors() {
+        return all().stream()
+                .filter(a -> a.outcome() == Outcome.TRANSIENT_FAILURE)
+                .filter(a -> !INJECTED_FAILURE_MESSAGE.equals(a.detail()))
+                .count();
+    }
+
+    /** 접수되지 않은 요청을 상세(5xx 문구 · 예외 종류)별로. 원인을 Mock 과 PC 중 어디서 찾을지 정한다. */
+    public Map<String, Integer> notAcceptedByDetail() {
+        Map<String, Integer> counts = new TreeMap<>();
+        all().stream()
+                .filter(a -> a.outcome() != Outcome.ACCEPTED)
+                .forEach(a -> counts.merge(a.outcome() + " · " + (a.detail() == null ? "—" : a.detail()),
+                        1, Integer::sum));
+        return counts;
+    }
+
+    /**
+     * 규칙마다 통과 · 실패를 정한다. 문서에만 있던 판정 규칙을 코드로 옮긴 것이다(리뷰 H3 ③).
+     *
+     * <p>시나리오마다 규칙이 다르다. {@code HTTP_5XX} 는 결과 불명이 0 이어야 하고 5xx 가 실패율만큼 나와야
+     * 하며, {@code TIMEOUT} 은 결과 불명이 전부여야 하고 그 키들이 원장에 하나도 없어야 한다(커밋 전에 끊는다).
+     * 예전에는 결과 불명이 대조에서 빠져, {@code timeout} 에서 끊기 전에 커밋하는 회귀가 생겨도 통과했다(⑤).
+     */
+    public Verdict judge(LoadPlan plan, Facts f) {
+        Map<Outcome, Integer> counts = byOutcome();
+        int sent = plan.totalRequests();
+        int unknown = counts.get(Outcome.UNKNOWN);
+        int notSent = counts.get(Outcome.NOT_SENT);
+        boolean http5xx = "HTTP_5XX".equals(f.failureMode());
+        RegistrationSnapshot db = f.db();
+        List<Verdict.Check> checks = new ArrayList<>();
+
+        // 이 실행이 판정할 자격이 있는가
+        checks.add(validity("목표 부하 — 발사 지연 ≤ " + plan.maxLaunchLag().toMillis() + "ms",
+                plan.targetLoadAchieved(f.launchLag()), f.launchLag().toMillis() + "ms"));
+        checks.add(validity("미전송 0건 — 부하가 서버에 다 닿았다", notSent == 0, notSent + "건"));
+        if (http5xx) {
+            checks.add(validity("시나리오가 응답 타임아웃 안에 든다", plan.leavesRoomFor(f.injected()),
+                    "주입 최대 " + f.injected().percentileMs(100) + "ms + 허용 "
+                            + plan.maxP99Overhead().toMillis() + "ms · 타임아웃 "
+                            + plan.responseTimeout().toMillis() + "ms"));
+        }
+        checks.add(validity("원장 조회", db != null, db != null ? db.rowCount() + "행" : f.dbError()));
+        boolean canaryFound = db != null && f.canary() != null && db.has(f.canary().key())
+                && f.canary().number().equals(db.numberOf(f.canary().key()));
+        checks.add(validity("원장이 이 Mock 의 것이다 — 확인용 등록이 같은 번호로 있다", canaryFound,
+                f.canary() == null ? "확인용 등록을 넣지 못했다" : "`" + f.canary().key() + "`"));
+        if (db != null) {
+            checks.add(validity("집계 전 원장이 잦아들었다", db.quiesced(), db.waited().toSeconds() + "초 대기"));
+        }
+
+        // Mock 이 계약대로 답했는가
+        checks.add(contract("분류 합 = 보낸 요청 수", total() == sent, total() + " / " + sent));
+        if (db != null) {
+            int mismatches = verifyAgainst(db).size();
+            checks.add(contract("키 대조 위반 0건", mismatches == 0, mismatches + "건"));
+            int foreign = foreignRows(db);
+            checks.add(contract("우리 키가 아닌 행 0건", foreign == 0, foreign + "건"));
+        }
+        long withoutHeader = respondedWithoutInjected();
+        checks.add(contract("주입 지연 헤더 없는 응답 0건", withoutHeader == 0, withoutHeader + "건"));
+        long nonInjected = nonInjectedServerErrors();
+        checks.add(contract("주입이 아닌 5xx 0건 — 처리 못 한 오류 · 재시도 상한 · 빈 500",
+                nonInjected == 0, nonInjected + "건"));
+        if (http5xx) {
+            checks.add(contract("결과 불명 ≤ " + percent(plan.maxUnknownRate()),
+                    unknown <= Math.floor(sent * plan.maxUnknownRate()), unknown + "건"));
+            int injectedFailures = counts.get(Outcome.TRANSIENT_FAILURE) - (int) nonInjected;
+            checks.add(failureRateCheck(injectedFailures, (int) responded(), f.failureRate()));
+        } else {
+            checks.add(f.failureRate() >= 1.0
+                    ? contract("결과 불명 100%", unknown == sent, unknown + " / " + sent)
+                    : rangeCheck("결과 불명이 실패율 " + f.failureRate() + " 의 99.9% 범위", unknown, sent,
+                    f.failureRate()));
+            if (db != null) {
+                long kept = unknownWithRow(db);
+                checks.add(contract("결과 불명 키의 행 0건 — 커밋 전에 끊는다", kept == 0, kept + "건"));
+            }
+        }
+
+        // Mock 이 충분히 빠른가 — 지연 판정 패스만 본다. 분류 판정 패스는 타임아웃이 워커 값이라 꼬리가 잘린다
+        if (plan.pass() == LoadPlan.Pass.LATENCY) {
+            checks.add(overheadCheck("p95", overheadPercentile(95), plan.maxP95Overhead()));
+            checks.add(overheadCheck("p99", overheadPercentile(99), plan.maxP99Overhead()));
+        }
+        return Verdict.of(checks);
+    }
+
+    /**
+     * 실패율 판정. "정확히 5%" 를 요구하지 않는다(요구사항 5.4). 5,000건 · 5% 면 우연만으로도 199 ~ 301건
+     * 사이에서 흔들리므로, 이항분포의 99.9% 범위 안이면 통과로 본다. 그 밖이면 주사위가 설정과 다르게 굴렀다.
+     */
+    static Verdict.Check failureRateCheck(int injectedFailures, int n, double rate) {
+        if (rate <= 0) {
+            return contract("실패율 0 → 5xx 0건", injectedFailures == 0, injectedFailures + "건");
+        }
+        if (rate >= 1) {
+            return contract("실패율 100% → 전부 5xx", injectedFailures == n, injectedFailures + " / " + n);
+        }
+        return rangeCheck("5xx 가 실패율 " + rate + " 의 99.9% 범위", injectedFailures, n, rate);
+    }
+
+    private static Verdict.Check rangeCheck(String name, int observed, int n, double rate) {
+        double mean = n * rate;
+        double sd = Math.sqrt(n * rate * (1 - rate));
+        long low = (long) Math.floor(mean - Z_999 * sd);
+        long high = (long) Math.ceil(mean + Z_999 * sd);
+        return contract(name, observed >= low && observed <= high,
+                observed + "건 (" + percent((double) observed / Math.max(n, 1)) + ") · 범위 " + low + " ~ " + high);
+    }
+
+    private static Verdict.Check overheadCheck(String name, Long overheadMs, Duration target) {
+        if (overheadMs == null) {
+            return new Verdict.Check(Verdict.Kind.METRIC, name + " 오버헤드 ≤ " + target.toMillis() + "ms",
+                    false, "측정 불가 — 헤더를 받은 응답 0건");
+        }
+        return new Verdict.Check(Verdict.Kind.METRIC, name + " 오버헤드 ≤ " + target.toMillis() + "ms",
+                overheadMs <= target.toMillis(), overheadMs + "ms");
+    }
+
+    private static Verdict.Check validity(String name, boolean ok, String detail) {
+        return new Verdict.Check(Verdict.Kind.VALIDITY, name, ok, detail);
+    }
+
+    private static Verdict.Check contract(String name, boolean ok, String detail) {
+        return new Verdict.Check(Verdict.Kind.CONTRACT, name, ok, detail);
     }
 
     /**
@@ -244,13 +412,16 @@ public final class LoadReport {
      * @param maxInFlight   동시에 떠 있던 요청의 최대치. 서버 쪽 커넥션 수의 대용값이다
      * @param elapsed       첫 발사부터 마지막 응답까지
      */
-    public String render(LoadPlan plan, String configBody, int configVersion,
-                         InjectedLatency injected, double heldFraction, int maxInFlight,
-                         Duration launchLag, Duration elapsed, RegistrationSnapshot db) {
+    public String render(LoadPlan plan, String configBody, int configVersion, Facts facts,
+                         double heldFraction, int maxInFlight, Duration elapsed, Verdict verdict) {
+        InjectedLatency injected = facts.injected();
+        Duration launchLag = facts.launchLag();
+        RegistrationSnapshot db = facts.db();
         Map<Outcome, Integer> counts = byOutcome();
         StringBuilder out = new StringBuilder();
 
         out.append("# 부하 시험 결과\n\n");
+        appendVerdict(out, verdict);
         boolean targetLoad = plan.targetLoadAchieved(launchLag);
         if (!targetLoad) {
             out.append("> ## ⚠ 목표 부하를 만들지 못했다 — 성능 판정에서 뺀다\n>\n");
@@ -335,6 +506,18 @@ public final class LoadReport {
             out.append("| 상태 | 건수 |\n| --- | --- |\n");
             byStatus().forEach((status, count) ->
                     out.append("| ").append(status).append(" | ").append(count).append(" |\n"));
+            out.append('\n');
+        }
+
+        Map<String, Integer> details = notAcceptedByDetail();
+        if (!details.isEmpty()) {
+            out.append("## 접수되지 않은 요청의 상세\n\n");
+            out.append("5xx 는 응답의 `errorMessage`, 응답을 못 받은 것은 예외 종류다. 주입 실패(`")
+                    .append(INJECTED_FAILURE_MESSAGE).append("`)가 아닌 5xx 는 Mock 의 진짜 오류이고, ")
+                    .append("예외 종류는 원인을 Mock 과 PC 중 어디서 찾을지 가른다.\n\n");
+            out.append("| 분류 · 상세 | 건수 |\n| --- | --- |\n");
+            details.forEach((detail, count) ->
+                    out.append("| ").append(detail).append(" | ").append(count).append(" |\n"));
             out.append('\n');
         }
 
@@ -429,8 +612,31 @@ public final class LoadReport {
         return "상한 ~" + Math.round(rps * perRequestSec);
     }
 
+    /** 맨 위에 판정 한 줄과 규칙별 결과. 숫자를 읽고 사람이 판정하던 것을 코드가 대신한다. */
+    private static void appendVerdict(StringBuilder out, Verdict verdict) {
+        out.append("## 판정: **").append(verdict.result().label()).append("**\n\n");
+        out.append("| 종류 | 규칙 | 값 | 결과 |\n| --- | --- | --- | --- |\n");
+        for (Verdict.Check check : verdict.checks()) {
+            String kind = switch (check.kind()) {
+                case VALIDITY -> "유효성";
+                case CONTRACT -> "계약";
+                case METRIC -> "지표";
+            };
+            out.append("| ").append(kind).append(" | ").append(check.name()).append(" | ")
+                    .append(check.detail()).append(" | ").append(check.ok() ? "통과" : "**실패**").append(" |\n");
+        }
+        out.append("\n> 유효성이 깨지면 **판정 불가**(이 실행으로는 판정할 수 없다), 나머지가 깨지면 **FAIL** 이다.\n")
+                .append("> 종료 코드 PASS 0 · FAIL 1 · 판정 불가 2.\n\n");
+    }
+
     private void appendVerification(StringBuilder out, LoadPlan plan,
                                     Map<Outcome, Integer> counts, RegistrationSnapshot db) {
+        if (db == null) {
+            // 조회에 실패해도 보고서는 남긴다. 실패한 실행을 기록에서 빼면 "조회 실패" 가 "불일치 0건" 처럼 보인다.
+            out.append("## DB 대조 (합격의 본체)\n\n**원장을 읽지 못했다 — 대조하지 않았다.** ")
+                    .append("이유는 위 판정 표의 \"원장 조회\" 행에 있다. 이 실행은 판정 불가다.\n\n");
+            return;
+        }
         List<Mismatch> mismatches = verifyAgainst(db);
         boolean sumMatches = total() == plan.totalRequests();
         int foreign = foreignRows(db);

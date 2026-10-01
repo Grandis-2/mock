@@ -35,6 +35,9 @@ public final class LoadRunner {
     private static final java.util.regex.Pattern EXTERNAL_NUMBER =
             java.util.regex.Pattern.compile("\"externalNumber\"\\s*:\\s*\"([^\"]+)\"");
 
+    private static final java.util.regex.Pattern ERROR_MESSAGE =
+            java.util.regex.Pattern.compile("\"errorMessage\"\\s*:\\s*\"([^\"]*)\"");
+
     private final LoadPlan plan;
     private final HttpClient client;
     private final LoadReport report = new LoadReport();
@@ -156,14 +159,19 @@ public final class LoadRunner {
                     outcome,
                     response.statusCode(),
                     latency,
-                    injectedMsOf(response)));
+                    injectedMsOf(response),
+                    response.statusCode() >= 500 ? errorMessageOf(response.body()) : null));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             report.add(new LoadReport.Attempt(
-                    key, null, Outcome.UNKNOWN, 0, Duration.between(sentAt, Instant.now())));
+                    key, null, Outcome.UNKNOWN, 0, Duration.between(sentAt, Instant.now()), null,
+                    e.getClass().getSimpleName()));
         } catch (Exception e) {
+            // 예외 종류를 남긴다. 결과 불명 · 미전송이 "응답 타임아웃" 인지 "연결 거부" 인지 보고서에서 갈라 봐야
+            // 원인을 Mock 과 PC 중 어디서 찾을지 정한다.
             report.add(new LoadReport.Attempt(
-                    key, null, Outcome.ofFailure(e), 0, Duration.between(sentAt, Instant.now())));
+                    key, null, Outcome.ofFailure(e), 0, Duration.between(sentAt, Instant.now()), null,
+                    e.getClass().getSimpleName()));
         } finally {
             inFlight.decrementAndGet();
         }
@@ -178,6 +186,15 @@ public final class LoadRunner {
     private static String externalNumberOf(String body) {
         var matcher = EXTERNAL_NUMBER.matcher(body);
         return matcher.find() ? matcher.group(1) : null;
+    }
+
+    /** 5xx 의 {@code errorMessage}. 본문이 없으면(유지 시간 뒤의 빈 500) "(본문 없음)" 이다. */
+    private static String errorMessageOf(String body) {
+        if (body == null || body.isBlank()) {
+            return "(본문 없음)";
+        }
+        var matcher = ERROR_MESSAGE.matcher(body);
+        return matcher.find() ? matcher.group(1) : "(errorMessage 없음)";
     }
 
     /**
@@ -224,7 +241,7 @@ public final class LoadRunner {
                 // 관찰 종료 조건을 넘긴 요청. 버리지 않고 결과 불명으로 센다.
                 future.cancel(true);
                 report.add(new LoadReport.Attempt(
-                        keys[i], null, Outcome.UNKNOWN, 0, plan.responseTimeout()));
+                        keys[i], null, Outcome.UNKNOWN, 0, plan.responseTimeout(), null, "관찰 종료 초과"));
             }
         }
     }
