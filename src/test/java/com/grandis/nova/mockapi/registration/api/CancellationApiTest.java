@@ -39,7 +39,7 @@ class CancellationApiTest {
     private static final String BODY = """
             {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
-    /** 응답 시각은 UTC Z 이고 밀리초까지다. */
+    /** 응답 시각은 UTC Z 이고 밀리초 세 자리다. 밀리초가 0 이어도 {@code .000} 이 붙는다(JsonTimeConfigTest). */
     private static final String UTC_MILLIS = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z";
 
     @Autowired

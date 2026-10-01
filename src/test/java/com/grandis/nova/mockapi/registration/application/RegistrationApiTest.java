@@ -129,7 +129,8 @@ class RegistrationApiTest {
                 .andExpect(jsonPath("$.productId").value(12))
                 .andExpect(jsonPath("$.sku").value("SM-G999-256-BLK"))
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
-                .andExpect(jsonPath("$.confirmedAt", matchesPattern(".+Z")))
+                .andExpect(jsonPath("$.confirmedAt",
+                        matchesPattern("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z")))
                 // 값이 없어도 필드를 생략하지 않는다
                 .andExpect(jsonPath("$.canceledAt").value(nullValue()));
     }

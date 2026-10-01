@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.5 / 2026-10-01 (키 · 번호 형식 제한 · 타입 자동 변환과 중복 필드 거절) |
+| 버전 / 작성일 | 5.5 / 2026-10-01 (키 · 번호 형식 제한 · 타입 자동 변환과 중복 필드 거절 · 시각 밀리초 세 자리) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
 | 기준 | ERD v5 (`스마트폰 사전예약 + 최소 일반 판매 ERD · v5 · 2026-09-17`, dbdiagram) |
@@ -192,6 +192,8 @@ ERD `external_mock.preorder_registrations` 와 1:1 이다.
 | `canceledAt` | datetime | `canceled_at` | 취소 표식을 남긴 시각 |
 
 `status = ACTIVE` 이면 나머지 필드가 모두 채워져 있어야 한다. ERD 의 `ck_registration_active_fields` CHECK 가 그것이다. 등록 전 취소는 키·상태·취소 시각만 있는 행으로 남는다.
+
+시각은 모두 UTC 이고 **밀리초 세 자리**로 쓴다(`2026-09-16T10:00:03.000Z`). 밀리초가 0 이어도 `.000` 을 붙인다. 제어 API 의 `appliedAt` · `createdAt` 도 같다.
 
 `quantity` 는 ERD 에서 제거했다. 사전예약 신청 단위가 수량 1 고정이고 `preorders` 에도 수량 칸이 없다.
 
