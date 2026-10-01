@@ -58,17 +58,21 @@ class ResetBarrierTest {
             });
             entered.await();
 
-            var ran = new boolean[1];
-            assertThatThrownBy(() -> barrier.exclusively(() -> {
-                ran[0] = true;
-                return 0L;
-            }))
-                    .isInstanceOf(MockException.class)
-                    .satisfies(e -> assertThat(((MockException) e).errorCode()).isEqualTo(ErrorCode.RESET_BUSY))
-                    .hasMessageContaining("1건");
-            assertThat(ran[0]).as("거절했으면 지우지 않는다").isFalse();
-
-            release.countDown();
+            // 단정이 실패해도 래치를 푼다. 안 풀면 작업이 계속 기다려 executor 가 닫히지 않고,
+            // 시험이 실패를 보고하는 대신 멈춘다.
+            try {
+                var ran = new boolean[1];
+                assertThatThrownBy(() -> barrier.exclusively(() -> {
+                    ran[0] = true;
+                    return 0L;
+                }))
+                        .isInstanceOf(MockException.class)
+                        .satisfies(e -> assertThat(((MockException) e).errorCode()).isEqualTo(ErrorCode.RESET_BUSY))
+                        .hasMessageContaining("1건");
+                assertThat(ran[0]).as("거절했으면 지우지 않는다").isFalse();
+            } finally {
+                release.countDown();
+            }
             request.get(5, TimeUnit.SECONDS);
         }
         assertThat(barrier.exclusively(() -> 1L)).isEqualTo(1L);
@@ -97,11 +101,13 @@ class ResetBarrierTest {
                 barrier.exit();
                 return null;
             });
-            assertThatThrownBy(() -> request.get(200, TimeUnit.MILLISECONDS))
-                    .as("초기화가 끝나기 전에 들어가면 안 된다")
-                    .isInstanceOf(TimeoutException.class);
-
-            finishReset.countDown();
+            try {
+                assertThatThrownBy(() -> request.get(200, TimeUnit.MILLISECONDS))
+                        .as("초기화가 끝나기 전에 들어가면 안 된다")
+                        .isInstanceOf(TimeoutException.class);
+            } finally {
+                finishReset.countDown();
+            }
             reset.get(5, TimeUnit.SECONDS);
             request.get(5, TimeUnit.SECONDS);
         }
