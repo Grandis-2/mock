@@ -114,6 +114,32 @@ class ResetBarrierApiTest {
         assertThat(repository.count()).isZero();
     }
 
+    /**
+     * 스프링은 {@code ;} 뒤 경로 변수를 떼고 매핑하므로 이 요청도 등록 컨트롤러까지 간다. 필터가
+     * {@code getRequestURI()} 로 경로를 다시 비교하던 때는 {@code ;x=1} 이 남아 진행 중으로 세지 않았고,
+     * 초기화가 200 · 등록이 201 ACTIVE 로 장벽을 지나갔다(리뷰 실측, 지연 3초).
+     */
+    @Test
+    @DisplayName("경로에 ; 가 붙은 등록도 진행 중으로 센다 — 장벽을 돌아가지 못한다")
+    void pathParametersDoNotBypass() throws Exception {
+        String key = "barrier-semicolon-" + UUID.randomUUID();
+        config.update(LATENCY_MS, 0.0, FailureMode.HTTP_5XX);
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<MvcResult> registration = pool.submit(() -> mvc.perform(post("/external/reservations;x=1")
+                    .header("Idempotency-Key", key)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(BODY)).andReturn());
+            awaitInFlight(1);
+
+            mvc.perform(post("/external/reset").contentType(MediaType.APPLICATION_JSON).content(RESET))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.errorCode").value("RESET_BUSY"));
+
+            assertThat(registration.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(201);
+        }
+    }
+
     @Test
     @DisplayName("진행 중인 등록이 없으면 초기화는 바로 된다 — 조회는 진행 중으로 세지 않는다")
     void resetAllowedWhenIdle() throws Exception {

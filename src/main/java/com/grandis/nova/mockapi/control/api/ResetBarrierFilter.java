@@ -44,9 +44,15 @@ class ResetBarrierFilter extends OncePerRequestFilter {
         this.barrier = barrier;
     }
 
+    /**
+     * 경로는 다시 보지 않는다. 위 등록의 URL 패턴이 이미 거르고, 서블릿 컨테이너는 컨텍스트 경로와
+     * {@code ;} 뒤 경로 변수를 떼고 맞춘다. 여기서 {@code getRequestURI()} 로 다시 비교하면 그 둘이 남아 있어
+     * {@code /external/reservations;x=1} 이 장벽을 지나갔다 — 스프링도 {@code ;} 뒤를 떼고 매핑하므로
+     * 요청은 컨트롤러까지 가는데 진행 중으로 세지 않았다. 조회(GET)만 빼면 된다.
+     */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !("POST".equals(request.getMethod()) && WRITE_PATHS.contains(request.getRequestURI()));
+        return !"POST".equals(request.getMethod());
     }
 
     @Override
