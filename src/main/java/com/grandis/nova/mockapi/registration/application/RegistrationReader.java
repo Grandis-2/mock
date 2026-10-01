@@ -5,6 +5,7 @@ import com.grandis.nova.mockapi.global.error.MockException;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -38,14 +39,17 @@ public class RegistrationReader {
      *
      * <p><b>공유 잠금으로 읽는다.</b> 같은 키의 등록이 커밋되기 전이면 끝날 때까지 기다린다. 그냥 읽으면
      * 진행 중인 등록을 못 본 채 404 가 나가고, 워커는 그걸 "등록 안 됨" 으로 믿고 재등록해 중복 등록이 된다.
-     * 기다린 뒤의 404 여야 "등록되지 않았다" 의 확정 근거가 된다.
      *
      * <p>지연은 등록 트랜잭션 밖이라 잠금을 쥐고 있지 않다. 등록 지연을 크게 잡아도 이 조회는 그만큼
-     * 기다리지 않는다.
+     * 기다리지 않고, 지연 중인 등록은 404 로 보인다. 그래서 404 는 "지금 없음" 이지 "앞으로도 없음" 이
+     * 아니다 — 워커는 같은 키로 다시 보내고, 그만둘 때는 같은 키로 먼저 취소한다(명세의 포기 규칙).
+     *
+     * <p>격리 수준은 등록과 같게 READ COMMITTED 로 정한다({@link RegistrationWriter} 참고). 잠금 읽기라
+     * REPEATABLE READ 에서는 없는 키에 갭 락을 걸어 그 틈의 새 등록을 막는다.
      *
      * @throws MockException 등록·취소 표식 어느 것도 없는 키(404)
      */
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.READ_COMMITTED)
     public Registration findByKey(String externalKey) {
         return repository.findByKeyForShare(externalKey)
                 .orElseThrow(() -> new MockException(ErrorCode.NOT_FOUND, "키에 대한 기록이 없습니다."));

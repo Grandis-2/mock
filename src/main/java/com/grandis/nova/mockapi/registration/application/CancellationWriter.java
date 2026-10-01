@@ -8,13 +8,14 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 취소 중 트랜잭션 안의 부분. 한 번 호출이 한 번의 시도다.
  *
  * <p>등록과 같은 이유로 서비스와 나눈다({@link RegistrationWriter} 참고). 중복 키가 나면 이 트랜잭션은
- * 롤백 전용이 되므로, 재시도는 바깥에서 새 트랜잭션으로 한다.
+ * 롤백 전용이 되므로, 재시도는 바깥에서 새 트랜잭션으로 한다. 격리 수준도 등록과 같은 이유로 여기서 정한다.
  */
 @Component
 public class CancellationWriter {
@@ -30,7 +31,7 @@ public class CancellationWriter {
      * @throws MockException 키와 번호가 서로 다른 등록을 가리킴(400)
      * @throws org.springframework.dao.DataIntegrityViolationException 중복 키. 바깥에서 새 트랜잭션으로 다시 부른다
      */
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public CancelResult cancelOnce(String externalKey, String externalNumber) {
         // 1. 키 행을 잠근다. 같은 키의 등록 · 취소와 직렬화된다.
         Optional<Registration> existing = repository.findByKeyForUpdate(externalKey);

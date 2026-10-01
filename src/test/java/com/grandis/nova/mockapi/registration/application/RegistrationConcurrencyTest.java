@@ -27,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -51,15 +53,16 @@ import org.testcontainers.utility.MountableFile;
  * <p>멱등 등록은 잠금 읽기와 중복 키(1062)에 기댄다. H2 는 둘 다 다르게 동작하므로 여기서 통과해야
  * 의미가 있다. 키 조회가 진행 중인 등록을 기다리는지, 등록과 취소가 엇갈려도 취소가 이기는지도
  * 잠금 · 중복 키 동작이라 여기서 본다. 스키마는
- * {@code docs/schema.sql} 을 그대로 넣고({@code ddl-auto=validate} 로 엔티티와 맞는지도 확인된다),
- * 서버 격리 수준은 compose 와 같은 READ COMMITTED 다.
+ * {@code docs/schema.sql} 을 그대로 넣는다({@code ddl-auto=validate} 로 엔티티와 맞는지도 확인된다).
+ *
+ * <p><b>서버와 커넥션 풀의 격리 수준은 MySQL 기본값(REPEATABLE READ) 그대로 둔다.</b> RDS 기본값도 RR 이고,
+ * 설정 파일 사본에서 격리 수준이 빠져도 등록이 맞게 돌아야 한다. READ COMMITTED 는 코드(트랜잭션 경계)가 정한다.
  *
  * <p>Docker 가 없으면 이 시험만 건너뛴다. 빌드는 막지 않는다.
  */
 @Testcontainers(disabledWithoutDocker = true)
 @SpringBootTest(properties = {
         "spring.jpa.hibernate.ddl-auto=validate",
-        "spring.datasource.hikari.transaction-isolation=TRANSACTION_READ_COMMITTED",
         "spring.datasource.hikari.maximum-pool-size=20"
 })
 @AutoConfigureMockMvc
@@ -72,7 +75,6 @@ class RegistrationConcurrencyTest {
             .withCopyFileToContainer(
                     MountableFile.forHostPath("docs/schema.sql"), "/docker-entrypoint-initdb.d/01-schema.sql")
             .withCommand(
-                    "--transaction-isolation=READ-COMMITTED",
                     "--character-set-server=utf8mb4",
                     "--collation-server=utf8mb4_0900_ai_ci");
 
@@ -81,6 +83,10 @@ class RegistrationConcurrencyTest {
     /** 동시성 버그는 경합에서만 나온다. 한 번 통과는 증명이 아니다(명세: 최소 100회). */
     private static final int ROUNDS = 100;
     private static final int CONCURRENT = 10;
+
+    /** 리뷰 재현과 같은 규모. 격리 수준이 빠지면 이 크기에서 대부분 교착한다. */
+    private static final int DISTINCT_KEYS = 50;
+    private static final int DISTINCT_ROUNDS = 5;
 
     /** 키 조회가 이만큼 돌아오지 않으면 등록을 기다리는 중으로 본다. 잠금 없는 조회는 몇 ms 면 끝난다. */
     private static final long LOCK_WAIT_PROOF_MS = 500;
@@ -117,11 +123,55 @@ class RegistrationConcurrencyTest {
     @MockitoSpyBean
     private FailureInjector failureInjector;
 
+    /** 아래 시험들이 설정에 기대지 않는다는 것을 보이려면 서버가 정말 RR 이어야 한다. */
     @Test
-    @DisplayName("커넥션 격리 수준이 READ COMMITTED 다 — 1062 를 정상 분기로 다루는 설계의 전제")
-    void readCommitted() {
+    @DisplayName("시험 서버의 커넥션은 MySQL 기본값 REPEATABLE READ 그대로다")
+    void serverDefaultIsRepeatableRead() {
         assertThat(jdbc.queryForObject("SELECT @@transaction_isolation", String.class))
-                .isEqualTo("READ-COMMITTED");
+                .isEqualTo("REPEATABLE-READ");
+    }
+
+    /** 번호 생성은 등록 트랜잭션 안에서 불린다. 그 자리에서 같은 커넥션의 격리 수준을 읽는다. */
+    @Test
+    @DisplayName("등록 시도는 서버 기본값과 상관없이 READ COMMITTED 로 돈다 — 1062 를 정상 분기로 다루는 설계의 전제")
+    void attemptRunsReadCommitted() {
+        var observed = new AtomicReference<String>();
+        doAnswer(invocation -> {
+            observed.set(jdbc.queryForObject("SELECT @@transaction_isolation", String.class));
+            return invocation.callRealMethod();
+        }).when(numbers).next(any());
+
+        service.register(UUID.randomUUID().toString(), COMMAND);
+
+        assertThat(observed).hasValue("READ-COMMITTED");
+    }
+
+    /**
+     * 서로 다른 새 키도 부딪힐 수 있다. REPEATABLE READ 에서 없는 키를 {@code FOR UPDATE} 로 읽으면 갭 락이
+     * 걸리고, 같은 틈에 떨어진 요청들의 INSERT 가 서로의 갭 락에 막혀 교착(1213)이 난다. 리뷰 재현에서는
+     * 격리 수준이 빠진 채 50건 × 5회 중 213건이 500 이었다.
+     */
+    @Test
+    @DisplayName("서로 다른 새 키 동시 50건 × 5회 - 서버가 REPEATABLE READ 여도 모두 새로 등록된다")
+    void distinctNewKeysConcurrently() throws Exception {
+        for (int round = 0; round < DISTINCT_ROUNDS; round++) {
+            var start = new CountDownLatch(1);
+            List<Future<RegisterResult>> futures = new ArrayList<>(DISTINCT_KEYS);
+            try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                for (int i = 0; i < DISTINCT_KEYS; i++) {
+                    String key = UUID.randomUUID().toString();
+                    futures.add(pool.submit(() -> {
+                        start.await();
+                        return service.register(key, COMMAND);
+                    }));
+                }
+                start.countDown();
+                // 교착이 나면 get() 이 여기서 터진다
+                for (Future<RegisterResult> future : futures) {
+                    assertThat(future.get(30, TimeUnit.SECONDS).replayed()).as("round %d", round).isFalse();
+                }
+            }
+        }
     }
 
     @Test
@@ -233,7 +283,7 @@ class RegistrationConcurrencyTest {
                 .contains(repository.findById(key).orElseThrow().externalNumber());
     }
 
-    /** 기다린 끝의 404 여야 확정 근거다. 롤백된 등록은 없던 일이니 기다린 뒤 404 가 맞다. */
+    /** 기다린 끝의 404 여야 트랜잭션 안의 등록을 놓치지 않은 것이다. 롤백된 등록은 없던 일이니 기다린 뒤 404 가 맞다. */
     @Test
     @DisplayName("기다리던 등록이 롤백되면 키 조회는 그 뒤에 404 다")
     void byKeyReturns404AfterRollback() throws Exception {
@@ -250,11 +300,14 @@ class RegistrationConcurrencyTest {
      * 실패다. 그 뒤 등록을 커밋(또는 롤백)하고 조회 응답을 돌려준다.
      */
     private MockHttpServletResponse lookupWhileRegistrationOpen(String key, boolean commit) throws Exception {
+        // 바깥 트랜잭션에 합류하면 안쪽 @Transactional 의 격리 수준은 무시된다. 등록과 같게 바깥에서 정한다.
+        var readCommitted = new TransactionTemplate(tx.getTransactionManager());
+        readCommitted.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         var inserted = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             try {
-                Future<?> registration = pool.submit(() -> tx.executeWithoutResult(status -> {
+                Future<?> registration = pool.submit(() -> readCommitted.executeWithoutResult(status -> {
                     writer.attemptOnce(key, COMMAND);   // 등록과 같은 경로로 INSERT 까지 간다
                     inserted.countDown();
                     awaitQuietly(release);

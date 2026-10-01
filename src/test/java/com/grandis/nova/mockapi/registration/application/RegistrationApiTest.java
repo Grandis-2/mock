@@ -387,4 +387,51 @@ class RegistrationApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage", containsString("quantity 은(는) 알 수 없는 필드입니다.")));
     }
+
+    /**
+     * 4xx 는 "확정 거절" 이라 워커는 등록이 안 됐다고 믿는다. 매핑에서 걸러지지 않으면 등록을 커밋한 뒤에야
+     * 응답을 못 써 406 이 나가, 된 등록을 안 된 것으로 믿게 된다.
+     */
+    @Test
+    @DisplayName("Accept: text/plain 등록 - 아무것도 남기지 않고 JSON 본문의 400")
+    void acceptWithoutJsonLeavesNothing() throws Exception {
+        String key = newKey();
+
+        mvc.perform(post(PATH)
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_PLAIN)
+                        .content(BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errorMessage", containsString("Accept")));
+
+        assertThat(repository.findById(key)).isEmpty();
+    }
+
+    /** 와일드카드 Content-Type 과 form 본문(curl {@code -d} 의 기본값)은 예전에 500 이었다. 500 은 재시도 대상이다. */
+    @Test
+    @DisplayName("JSON 이 아닌 Content-Type - 와일드카드 · form 본문 모두 400, 아무것도 남기지 않는다")
+    void nonJsonContentTypeIsBadRequest() throws Exception {
+        String wildcard = newKey();
+        mvc.perform(post(PATH)
+                        .header("Idempotency-Key", wildcard)
+                        .contentType("application/*")
+                        .content(BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errorMessage", containsString("Content-Type")));
+
+        String form = newKey();
+        mvc.perform(post(PATH)
+                        .header("Idempotency-Key", form)
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .content("sku=100%"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
+
+        assertThat(repository.findById(wildcard)).isEmpty();
+        assertThat(repository.findById(form)).isEmpty();
+    }
 }

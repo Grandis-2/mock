@@ -21,7 +21,7 @@ public interface RegistrationRepository extends JpaRepository<Registration, Stri
 
     /**
      * 잠금 없이 읽으면 커밋 안 된 등록을 보지 못한 채 "없음" 이 나온다.
-     * by-key 조회의 404 를 "등록되지 않았다" 의 확정 근거로 쓰려면 공유 잠금으로 기다려야 한다.
+     * by-key 조회가 트랜잭션 안의 등록을 놓치지 않으려면 공유 잠금으로 기다려야 한다.
      */
     @Lock(LockModeType.PESSIMISTIC_READ)
     @Query("select r from Registration r where r.externalKey = :externalKey")

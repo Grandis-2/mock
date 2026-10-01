@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -18,6 +19,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 같은 트랜잭션 안에서 다시 시도해도 커밋되지 않는다. 트랜잭션을 나갔다가 새로 시작해야 하므로
  * 재시도 루프는 바깥(서비스)에, 한 번의 시도는 여기에 둔다. 같은 클래스 안에서 부르면 프록시를
  * 거치지 않아 {@code @Transactional} 이 먹지 않으므로 빈을 따로 둔다.
+ *
+ * <p><b>격리 수준은 여기서 정한다.</b> 없는 키를 {@code FOR UPDATE} 로 읽으면 MySQL 기본값(REPEATABLE READ)
+ * 에서는 갭 락이 걸리고, 같은 틈에 떨어진 두 요청의 INSERT 가 서로의 갭 락에 막혀 교착(1213)이 난다.
+ * 설정 파일에만 두면 사본을 놓친 사람과 RDS(기본 RR)에서 빠진다.
  */
 @Component
 public class RegistrationWriter {
@@ -34,7 +39,7 @@ public class RegistrationWriter {
      * @throws MockException 취소된 키(409) · 같은 키 다른 내용(422)
      * @throws org.springframework.dao.DataIntegrityViolationException 중복 키. 바깥에서 새 트랜잭션으로 다시 부른다
      */
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Attempt attemptOnce(String key, RegisterCommand command) {
         // 3. 키 행을 잠그고 읽는다. 행이 없으면 잠금이 걸리지 않는다(READ COMMITTED 에는 갭 락이 없다).
         var existing = repository.findByKeyForUpdate(key);
