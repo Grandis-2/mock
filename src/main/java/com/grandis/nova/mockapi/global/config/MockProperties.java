@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.global.config;
 
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
@@ -55,12 +56,34 @@ public record MockProperties(
         /**
          * TIMEOUT 모드와 응답 유실 결함에서 응답 없이 연결을 유지하는 시간.
          *
+         * <p><b>워커 읽기 타임아웃보다 2초 이상 길어야 한다</b>(docs/api.md). 유지가 끝나면 본문 없는
+         * 500 으로 마감하므로, 워커가 먼저 포기해야 결과 불명이 된다. 둘이 같으면 결과가 갈린다 —
+         * 워커 5초 · 유지 5초에서 결과 불명을 만들려던 요청의 32~58% 가 빈 500 을 받았다.
+         *
          * <p>0 은 시험 전용이다 — 붙잡지 않고 바로 빈 500 으로 끝낸다. 워커에게는 결과 불명이 아니라
-         * 일시 실패로 보이므로 운영 · 시연에서는 쓰지 않는다.
+         * 일시 실패로 보이므로 운영 · 시연에서는 쓰지 않는다. 그래서 위 규칙에서 뺀다.
          *
          * <p>음수는 뜻이 없는 값이라 막는다. {@code Thread.sleep} 이 예외를 던져 "처리하지 못한 오류" 로
          * 찍히고, 부하 판정이 0건이어야 한다고 세는 서버 버그 로그와 섞인다.
          */
-        @Min(0) @DefaultValue("5000") long timeoutHoldMs
+        @Min(0) @DefaultValue("7000") long timeoutHoldMs,
+
+        /**
+         * 본 서비스 워커의 HTTP 읽기 타임아웃. Mock 이 정하는 값이 아니라 be 워커 설정을 옮겨 적는 값이다.
+         *
+         * <p>Mock 은 이 값을 쓰지 않고, 유지 시간이 이보다 충분히 긴지 기동할 때 확인하는 데만 쓴다.
+         * 따로 적어 두지 않으면 워커 타임아웃이 바뀌었을 때 유지 시간이 조용히 어긋난다.
+         */
+        @Min(1) @DefaultValue("5000") long workerReadTimeoutMs
 ) {
+
+    /** 유지 시간이 워커 읽기 타임아웃보다 이만큼은 길어야 한다. 네트워크 · 처리 시간에 따른 경계를 피한다. */
+    public static final long HOLD_MARGIN_MS = 2000;
+
+    /** 두 값의 관계라 필드 하나의 범위로는 막을 수 없다. 어긋나면 범위 검사와 똑같이 기동하지 않는다. */
+    @AssertTrue(message = "timeoutHoldMs 는 0(시험 전용)이거나 workerReadTimeoutMs + 2000 이상이어야 합니다."
+            + " 같거나 짧으면 워커가 타임아웃 대신 빈 500 을 받아 결과 불명이 되지 않습니다.")
+    public boolean isTimeoutHoldLongerThanWorker() {
+        return timeoutHoldMs == 0 || timeoutHoldMs >= workerReadTimeoutMs + HOLD_MARGIN_MS;
+    }
 }

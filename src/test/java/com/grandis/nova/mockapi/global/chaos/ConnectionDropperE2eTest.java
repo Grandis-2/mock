@@ -33,7 +33,8 @@ import org.springframework.web.client.RestClient;
  */
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "mock.timeout-hold-ms=3000")
+        // 유지 시간은 워커 타임아웃 + 2초 이상이어야 기동한다. 시험이 오래 걸리지 않게 둘 다 줄인다.
+        properties = {"mock.timeout-hold-ms=3000", "mock.worker-read-timeout-ms=1000"})
 @Import(ConnectionDropperE2eTest.InjectProbeController.class)
 class ConnectionDropperE2eTest {
 

@@ -3,6 +3,10 @@
 # H2 는 컨텍스트 로딩과 단순 검증용이다. 멱등 등록의 동시성은 잠금·중복 키 동작에 기대므로
 # H2 에서 통과해도 MySQL 에서 통과한다는 보장이 없다. 동시성 시험은 MySQL 로 돌린다.
 spring:
+  # 운영과 같게 가상 스레드로 돈다. 꺼져 있으면 Mock 이 뜨지 않는다(VirtualThreadGuard).
+  threads:
+    virtual:
+      enabled: true
   datasource:
     url: jdbc:h2:mem:mockapi;MODE=MySQL;DB_CLOSE_DELAY=-1
     username: sa
@@ -21,7 +25,9 @@ mock:
   register-latency-ms: 0
   failure-rate: 0.0
   failure-mode: HTTP_5XX
-  timeout-hold-ms: 1000
+  # 0 은 시험 전용 — 붙잡지 않는다. 0 보다 크면 워커 타임아웃 + 2초 이상이어야 기동한다(MockProperties).
+  # 실제로 붙잡는 시험(ConnectionDropperE2eTest)은 두 값을 따로 정한다.
+  timeout-hold-ms: 0
   # 단위 시험만 지터 0 으로 돈다. 흔들리면 "설정만큼 기다린다" 를 단정할 수 없다.
   # 운영 · 시연 · 부하 판정은 기본값 0.4 (평균 500ms) 다.
   latency-jitter: 0.0

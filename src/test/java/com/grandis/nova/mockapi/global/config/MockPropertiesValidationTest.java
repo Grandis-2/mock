@@ -79,11 +79,44 @@ class MockPropertiesValidationTest {
             "mock.failure-rate=-0.1,        failureRate",
             "mock.register-latency-ms=-1,   registerLatencyMs",
             "mock.register-latency-ms=60001, registerLatencyMs",
-            "mock.timeout-hold-ms=-1,       timeoutHoldMs"})
+            "mock.timeout-hold-ms=-1,       timeoutHoldMs",
+            "mock.worker-read-timeout-ms=0, workerReadTimeoutMs"})
     @DisplayName("범위를 벗어나면 기동하지 않는다 — 설정 API 와 같은 범위")
     void rejectsOutOfRange(String property, String field) {
         runner.withPropertyValues(property)
                 .run(context -> assertThat(context).getFailure()
                         .rootCause().hasMessageContaining(field));
+    }
+
+    @Test
+    @DisplayName("기본값은 워커 5초 · 유지 7초다 — be 워커 설정과 계약(docs/api.md)")
+    void defaultHoldOutlastsWorker() {
+        runner.run(context -> {
+            var properties = context.getBean(MockProperties.class);
+            assertThat(properties.workerReadTimeoutMs()).isEqualTo(5000);
+            assertThat(properties.timeoutHoldMs()).isEqualTo(7000);
+        });
+    }
+
+    /** 0 은 시험 전용(바로 빈 500)이라 규칙에서 빠진다. 0 보다 크면 워커 + 2초가 경계다. */
+    @ParameterizedTest(name = "유지 {0} · 워커 {1}")
+    @CsvSource({"0, 5000", "7000, 5000", "3000, 1000"})
+    @DisplayName("유지 시간이 0 이거나 워커 타임아웃 + 2초 이상이면 기동한다")
+    void acceptsHoldOutlastingWorker(long hold, long worker) {
+        runner.withPropertyValues("mock.timeout-hold-ms=" + hold, "mock.worker-read-timeout-ms=" + worker)
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * 같거나 2초 안쪽이면 워커가 먼저 포기하지 못해 빈 500 을 받는다. 결과 불명을 만들려던 요청이
+     * 일시 실패로 바뀐다 — 리뷰 실측에서 워커 5초 · 유지 5초일 때 32~58%.
+     */
+    @ParameterizedTest(name = "유지 {0} · 워커 {1}")
+    @CsvSource({"5000, 5000", "6999, 5000", "1000, 5000"})
+    @DisplayName("유지 시간이 워커 타임아웃 + 2초보다 짧으면 기동하지 않는다")
+    void rejectsHoldNotOutlastingWorker(long hold, long worker) {
+        runner.withPropertyValues("mock.timeout-hold-ms=" + hold, "mock.worker-read-timeout-ms=" + worker)
+                .run(context -> assertThat(context).getFailure()
+                        .rootCause().hasMessageContaining("workerReadTimeoutMs + 2000"));
     }
 }

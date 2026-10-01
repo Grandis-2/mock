@@ -57,9 +57,12 @@ mock:
   # 확률이다. 5% 는 0.05 (5 가 아니다). 0 ~ 1 만 받는다(벗어나면 기동 실패).
   failure-rate: 0.05
   failure-mode: HTTP_5XX
-  # TIMEOUT 모드에서 응답 없이 연결을 유지하는 시간.
-  # 워커 HTTP 읽기 타임아웃 + 2초로 잡는다. 지금은 워커 타임아웃 3초 가정값이다.
-  timeout-hold-ms: 5000
+  # TIMEOUT 모드와 결함에서 응답 없이 연결을 유지하는 시간. 워커 읽기 타임아웃 + 2초 이상이어야
+  # 기동한다(docs/api.md). 짧으면 워커가 타임아웃 대신 빈 500 을 받아 결과 불명이 되지 않는다.
+  timeout-hold-ms: 7000
+  # be 워커의 HTTP 읽기 타임아웃(be worker 설정 read-timeout: 5s). Mock 은 위 규칙을 확인하는 데만 쓴다.
+  # 워커 값이 바뀌면 이 줄과 timeout-hold-ms 를 함께 옮긴다.
+  worker-read-timeout-ms: 5000
 
 logging:
   level:
