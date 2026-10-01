@@ -41,6 +41,9 @@ import tools.jackson.databind.exc.UnrecognizedPropertyException;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    /** 처리하지 못한 오류의 500 문구. 부하 시험이 이 문구로 주입 실패와 구분한다(명세 오류 분류 계약). */
+    public static final String UNHANDLED_MESSAGE = "Mock 이 처리하지 못한 오류입니다.";
+
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /** Mock 이 계약대로 내는 오류. */
@@ -137,10 +140,13 @@ public class GlobalExceptionHandler {
     /**
      * 없는 경로. 아래 catch-all 로 떨어지면 500 UPSTREAM_UNAVAILABLE 이 되는데,
      * 본 서비스가 그것을 일시 실패로 보고 재시도한다. 경로 오타는 재시도해도 소용없으므로 404 로 준다.
+     *
+     * <p>코드는 {@code NOT_FOUND} 가 아니라 {@code NO_SUCH_ENDPOINT} 다. 워커가 키 조회 주소를 잘못 잡으면
+     * 모든 조회가 404 가 되는데, 그게 {@code NOT_FOUND} 면 "등록 없음" 으로 읽고 재등록 · 포기를 정한다.
      */
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<ErrorResponse> handleNoResource(NoResourceFoundException e) {
-        ErrorCode code = ErrorCode.NOT_FOUND;
+        ErrorCode code = ErrorCode.NO_SUCH_ENDPOINT;
         return ResponseEntity.status(code.status())
                 .body(ErrorResponse.of(code, "그런 경로가 없습니다: " + e.getResourcePath()));
     }
@@ -165,22 +171,26 @@ public class GlobalExceptionHandler {
     /**
      * 나머지. Mock 의 500 은 본 서비스 공통 오류(INTERNAL_ERROR)가 아니라 UPSTREAM_UNAVAILABLE 이다.
      * 본 서비스는 이것을 일시 실패로 보고 재시도한다.
+     *
+     * <p>코드는 주입 실패와 같지만 문구는 {@link #UNHANDLED_MESSAGE} 로 나눈다. 같으면 교착 같은 진짜 서버
+     * 오류가 부하 시험에서 "주입한 5%" 에 섞여 보이지 않는다.
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception e) {
         // 스프링이 스스로 4xx 라고 표시해 던지는 예외는 요청이 잘못된 것이지 Mock 이 아픈 게 아니다.
         // 개별 핸들러를 빠뜨려도 여기서 걸러 500 으로 나가지 않게 한다. 500 은 워커가 재시도한다.
+        // 기록 없음은 MockException 으로만 낸다. 스프링이 404 로 표시한 것은 경로 문제다.
         if (e instanceof org.springframework.web.ErrorResponse spring
                 && spring.getStatusCode().is4xxClientError()) {
             log.warn("개별 핸들러 없이 4xx 예외를 받았다: {}", e.getClass().getName());
             ErrorCode code = spring.getStatusCode().value() == 404
-                    ? ErrorCode.NOT_FOUND
+                    ? ErrorCode.NO_SUCH_ENDPOINT
                     : ErrorCode.INVALID_REQUEST;
             return ResponseEntity.status(code.status()).body(ErrorResponse.of(code));
         }
         log.error("처리하지 못한 오류", e);
         ErrorCode code = ErrorCode.UPSTREAM_UNAVAILABLE;
-        return ResponseEntity.status(code.status()).body(ErrorResponse.of(code));
+        return ResponseEntity.status(code.status()).body(ErrorResponse.of(code, UNHANDLED_MESSAGE));
     }
 
     /**

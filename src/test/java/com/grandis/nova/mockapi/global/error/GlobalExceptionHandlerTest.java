@@ -96,12 +96,13 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
     }
 
+    /** 기록 없음({@code NOT_FOUND})과 코드가 같으면 워커가 주소 오타를 "등록 없음" 으로 읽는다. */
     @Test
-    @DisplayName("없는 경로 - 404 이며 오류 형식을 지킨다")
+    @DisplayName("없는 경로 - 404 NO_SUCH_ENDPOINT 이며 오류 형식을 지킨다")
     void noResource() throws Exception {
         mvc.perform(get("/없는경로"))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.errorCode").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.errorCode").value("NO_SUCH_ENDPOINT"))
                 // 값이 없어도 필드를 생략하지 않는다(명세). doesNotExist() 는 필드가 아예 없어도
                 // 통과해서 이 계약을 못 잡는다. value(nullValue()) 는 "있고 null" 만 통과한다.
                 .andExpect(jsonPath("$.externalNumber").value(nullValue()));
@@ -110,14 +111,18 @@ class GlobalExceptionHandlerTest {
     /**
      * 부하 시험은 서버 로그의 "처리하지 못한 오류" 가 0건인지 센다. 진짜 서버 오류는 이 문구로 남아야 하고,
      * 아래 끊긴 클라이언트 시험이 "안 찍혔다" 를 볼 때 로그를 제대로 붙잡고 있다는 근거도 된다.
+     * 응답 문구도 주입 실패와 달라야 부하 결과에서 둘을 나눌 수 있다.
      */
     @Test
     @ExtendWith(OutputCaptureExtension.class)
-    @DisplayName("Mock 안에서 터진 오류만 500 UPSTREAM_UNAVAILABLE 이고 ERROR 로 남는다")
+    @DisplayName("Mock 안에서 터진 오류만 500 UPSTREAM_UNAVAILABLE 이고 ERROR 로 남으며, 문구가 주입 실패와 다르다")
     void unexpectedStaysServerError(CapturedOutput output) throws Exception {
         mvc.perform(get("/probe/boom"))
                 .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"));
+                .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"))
+                .andExpect(jsonPath("$.errorMessage").value(GlobalExceptionHandler.UNHANDLED_MESSAGE));
+        assertThat(GlobalExceptionHandler.UNHANDLED_MESSAGE)
+                .isNotEqualTo(ErrorCode.UPSTREAM_UNAVAILABLE.defaultMessage());
         assertThat(output).contains("처리하지 못한 오류");
     }
 
