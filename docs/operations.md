@@ -159,13 +159,16 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' \
   -d '{"externalKey":"demo-lost-1","faultType":"RESPONSE_LOST_AFTER_COMMIT"}'
 
-curl -X POST localhost:8081/external/reservations \
+curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-lost-1' -H 'Content-Type: application/json' \
   -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'
+
+curl -i localhost:8081/external/reservations/by-key/demo-lost-1
 ```
 
 **응답이 오지 않는다.** `mock.timeout-hold-ms`(기본 7000ms) 만큼 붙잡았다가 본문 없는 500 으로
-끝낸다. 워커(5초)는 그 전에 포기한다.
+끝낸다. 워커(5초)는 그 전에 포기한다 — `--max-time 5` 가 워커를 흉내 낸 것이다. 빼고 보내면 7초 뒤
+빈 500 을 받는데, 그건 워커가 겪는 일이 아니다.
 
 | 확인할 것 | 결과 |
 | --- | --- |
