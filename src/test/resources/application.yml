@@ -21,7 +21,9 @@ mock:
   register-latency-ms: 0
   failure-rate: 0.0
   failure-mode: HTTP_5XX
-  timeout-hold-ms: 1000
+  # 0 은 시험 전용 — 붙잡지 않는다. 0 보다 크면 워커 타임아웃 + 2초 이상이어야 기동한다(MockProperties).
+  # 실제로 붙잡는 시험(ConnectionDropperE2eTest)은 두 값을 따로 정한다.
+  timeout-hold-ms: 0
   # 단위 시험만 지터 0 으로 돈다. 흔들리면 "설정만큼 기다린다" 를 단정할 수 없다.
   # 운영 · 시연 · 부하 판정은 기본값 0.4 (평균 500ms) 다.
   latency-jitter: 0.0
