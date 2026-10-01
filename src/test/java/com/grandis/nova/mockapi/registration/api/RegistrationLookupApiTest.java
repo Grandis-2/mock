@@ -204,13 +204,14 @@ class RegistrationLookupApiTest {
     }
 
     @Test
-    @DisplayName("키가 비었거나 100자를 넘으면 400 - 100자는 받는다")
-    void byKeyInvalidLength() throws Exception {
-        for (String key : new String[]{"   ", "k".repeat(101)}) {
+    @DisplayName("키가 영문 · 숫자 · . _ - 1~100자가 아니면 400 - 100자는 받는다")
+    void byKeyInvalidFormat() throws Exception {
+        for (String key : new String[]{"   ", "k".repeat(101), "a b", "키-1"}) {
             byKey(key)
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
-                    .andExpect(jsonPath("$.errorMessage").value("externalKey 은(는) 1~100자여야 합니다."));
+                    .andExpect(jsonPath("$.errorMessage")
+                            .value("externalKey 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
         }
         // 인메모리 DB 는 시험 클래스끼리 공유된다. 다른 시험이 등록한 키와 겹치지 않게 새로 만든다
         String longest = (newKey() + "k".repeat(100)).substring(0, 100);

@@ -260,16 +260,20 @@ class CancellationApiTest {
     }
 
     @Test
-    @DisplayName("키 · 번호가 비었거나 100자를 넘으면 400")
-    void invalidLength() throws Exception {
-        cancel("""
-                {"externalKey":"   "}""")
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage").value("externalKey 은(는) 1~100자여야 합니다."));
+    @DisplayName("키 · 번호가 영문 · 숫자 · . _ - 1~100자가 아니면 400")
+    void invalidFormat() throws Exception {
+        for (String key : new String[]{"   ", "pad-1 ", "a/b"}) {
+            cancel("""
+                    {"externalKey":"%s"}""".formatted(key))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorMessage")
+                            .value("externalKey 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
+        }
         cancel("""
                 {"externalNumber":"%s"}""".formatted("R".repeat(101)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage").value("externalNumber 은(는) 1~100자여야 합니다."));
+                .andExpect(jsonPath("$.errorMessage")
+                        .value("externalNumber 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
     }
 
     /**

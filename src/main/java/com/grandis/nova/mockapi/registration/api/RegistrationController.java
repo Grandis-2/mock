@@ -43,7 +43,7 @@ public class RegistrationController {
     public ResponseEntity<RegistrationResponse> register(
             @RequestHeader(IDEMPOTENCY_KEY) String key,
             @Valid @RequestBody RegisterRequest request) {
-        Identifiers.requireLength(IDEMPOTENCY_KEY, key);
+        Identifiers.requireFormat(IDEMPOTENCY_KEY, key);
 
         RegisterResult result = service.register(key, request.toCommand());
 
@@ -62,7 +62,7 @@ public class RegistrationController {
     /** 키로 등록 상태 조회. 응답 유실 뒤 재시도 전에 워커가 부른다. 404 는 "지금 등록이 없다" 는 뜻이다. */
     @GetMapping("/by-key/{externalKey}")
     public KeyStatusResponse findByKey(@PathVariable String externalKey) {
-        Identifiers.requireLength("externalKey", externalKey);
+        Identifiers.requireFormat("externalKey", externalKey);
         return KeyStatusResponse.from(reader.findByKey(externalKey));
     }
 }

@@ -357,15 +357,40 @@ class RegistrationApiTest {
                 .andExpect(jsonPath("$.errorMessage").value("Idempotency-Key 헤더가 필요합니다."));
     }
 
+    /**
+     * 받아 놓고 다시 찾을 수 없는 키를 거절한다. {@code /} 는 키 조회 경로에 못 넣고, 끝 공백은 콜레이션이
+     * 무시해 다른 키와 같은 행이 되며, 비 ASCII 는 헤더에서 깨진다. {@code .} · {@code ..} 는 경로로 해석된다.
+     */
     @Test
-    @DisplayName("Idempotency-Key 가 비었거나 100자를 넘으면 400")
-    void invalidKeyLength() throws Exception {
-        for (String key : new String[]{"   ", "k".repeat(101)}) {
+    @DisplayName("Idempotency-Key 는 영문 · 숫자 · . _ - 1~100자 - 그 밖은 400")
+    void invalidKeyFormat() throws Exception {
+        for (String key : new String[]{"   ", "k".repeat(101), "pad-1 ", "a b", "a/b", "키-1", "a,b", ".", ".."}) {
             register(key, BODY)
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.errorMessage").value("Idempotency-Key 은(는) 1~100자여야 합니다."));
+                    .andExpect(jsonPath("$.errorMessage")
+                            .value("Idempotency-Key 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
         }
-        register("k".repeat(100), BODY).andExpect(status().isCreated());
+        for (String key : new String[]{"k".repeat(100), newKey(), "test-lost_1.v2", "..." + newKey()}) {
+            register(key, BODY).andExpect(status().isCreated());
+        }
+    }
+
+    /** 헤더가 두 개면 스프링이 쉼표로 이어 한 값으로 준다. 어느 쪽 키로도 저장하지 않는다. */
+    @Test
+    @DisplayName("Idempotency-Key 헤더가 두 개면 400")
+    void duplicateKeyHeader() throws Exception {
+        String first = newKey();
+        String second = newKey();
+
+        mvc.perform(post(PATH)
+                        .header("Idempotency-Key", first, second)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
+
+        assertThat(repository.findById(first)).isEmpty();
+        assertThat(repository.findById(second)).isEmpty();
     }
 
     @Test

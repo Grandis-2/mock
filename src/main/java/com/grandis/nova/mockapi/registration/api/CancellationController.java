@@ -30,10 +30,10 @@ public class CancellationController {
             throw new MockException(ErrorCode.INVALID_REQUEST, "externalKey 와 externalNumber 중 하나는 있어야 합니다.");
         }
         if (key != null) {
-            Identifiers.requireLength("externalKey", key);
+            Identifiers.requireFormat("externalKey", key);
         }
         if (number != null) {
-            Identifiers.requireLength("externalNumber", number);
+            Identifiers.requireFormat("externalNumber", number);
         }
         return CancelResponse.from(service.cancel(key, number));
     }

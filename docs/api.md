@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.4 / 2026-10-01 (워커 타임아웃 5초 · 유지 7초 · 결과 불명 처리 · 키 조회 404 의 뜻 · 포기 규칙 · 없는 경로 `NO_SUCH_ENDPOINT` · 500 문구 구분 · 헤더 검사) |
+| 버전 / 작성일 | 5.5 / 2026-10-01 (키 · 번호 형식 제한) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
 | 기준 | ERD v5 (`스마트폰 사전예약 + 최소 일반 판매 ERD · v5 · 2026-09-17`, dbdiagram) |
@@ -110,7 +110,7 @@ Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RE
 | 계약에 없는 필드 | `quantity 은(는) 알 수 없는 필드입니다. 받을 수 있는 필드: customerId, productId, sku` |
 | enum 값 | `failureMode 은(는) HTTP_5XX, TIMEOUT 중 하나여야 합니다. 받은 값: HTTP_429` |
 | 필수 값 누락 | `sku 은(는) 필수입니다.` |
-| 길이 | `sku 은(는) 80자 이하여야 합니다.` · `Idempotency-Key 은(는) 1~100자여야 합니다.` |
+| 길이 · 형식 | `sku 은(는) 80자 이하여야 합니다.` · `Idempotency-Key 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다.` |
 | 필수 헤더 누락 | `Idempotency-Key 헤더가 필요합니다.` |
 | `Content-Type` | `Content-Type 이 application/json 이어야 합니다. 받은 값: application/*` |
 | `Accept` | `Accept 가 application/json 을 받아야 합니다. 받은 값: text/plain` |
@@ -149,7 +149,16 @@ ERD 의 `preorder_token` 은 `char(36)` UUID 이며 "공개 UUID 이자 외부 M
 - 등록·조회·취소가 같은 키를 쓴다.
 - 결과 불명이라고 새 키를 만들지 않는다. 같은 키로 재시도하거나 `by-key` 조회로 먼저 확인한다.
 - 식별자 비교는 **대소문자를 구별한다.** ERD 가 키 칸을 `COLLATE utf8mb4_bin` 으로 둔 것과 같은 규칙이다.
-- Mock 은 키 형식을 UUID 로 강제하지 않는다. ERD 키 칸이 `varchar(100)` 이므로 **1~100자**만 검사한다. Mock 단독 시험에서 `test-lost-1` 같은 키를 쓸 수 있다.
+- Mock 은 키를 UUID 로 강제하지 않는다. **영문 · 숫자 · `.` `_` `-` 로 된 1~100자**(ERD 키 칸 `varchar(100)`)면 받는다. Mock 단독 시험에서 `test-lost-1` 같은 키를 쓸 수 있다. 외부 번호(`externalNumber`)도 같은 규칙이다.
+- 그 밖의 문자는 400 이다. 받아 놓고 다시 찾을 수 없는 키를 만들지 않기 위해서다.
+
+  | 막는 것 | 받으면 생기는 일 |
+  | --- | --- |
+  | `/` | 키 조회는 키를 경로에 넣는다. 등록은 되는데 키 조회로 찾을 수 없다 |
+  | 공백 | 키 칸 콜레이션이 끝 공백을 무시하고 비교한다(PAD SPACE). `pad-1 ` 의 등록을 `pad-1` 의 조회 · 취소가 잡는다 |
+  | 비 ASCII | 헤더가 ISO-8859-1 로 읽혀 깨진 채 저장된다 |
+  | `,` | `Idempotency-Key` 헤더가 두 개면 `a,b` 한 키로 합쳐진다 |
+  | `.` · `..` 만으로 된 키 | 경로에서 현재 · 상위 경로로 해석된다 |
 
 ## 내용 비교
 
@@ -232,7 +241,7 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 
 | 이름 | 위치 | 타입 | 필수 | 제약 |
 | --- | --- | --- | --- | --- |
-| `Idempotency-Key` | header | string | 필수 | 1~100자. 본 서비스는 `preorder_token`(`char(36)` UUID)을 보낸다 |
+| `Idempotency-Key` | header | string | 필수 | 영문 · 숫자 · `. _ -` 1~100자(멱등 키 절). 본 서비스는 `preorder_token`(`char(36)` UUID)을 보낸다 |
 
 **Body**
 
@@ -407,7 +416,7 @@ Accept: application/json
 
 | 이름 | 위치 | 타입 | 필수 | 제약 |
 | --- | --- | --- | --- | --- |
-| `externalKey` | path | string | 필수 | 1~100자. 우리 `preorder_token` |
+| `externalKey` | path | string | 필수 | 영문 · 숫자 · `. _ -` 1~100자. 우리 `preorder_token` |
 
 **Body**: 없음
 
@@ -507,8 +516,8 @@ Accept: application/json
 
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `externalKey` | string | 조건부 | 우리 `preorder_token`. 1~100자 |
-| `externalNumber` | string | 조건부 | Mock 이 발급한 번호. 1~100자 |
+| `externalKey` | string | 조건부 | 우리 `preorder_token`. 영문 · 숫자 · `. _ -` 1~100자 |
+| `externalNumber` | string | 조건부 | Mock 이 발급한 번호. 영문 · 숫자 · `. _ -` 1~100자 |
 | `reason` | string | 선택 | `USER_CANCEL` · `ADMIN_CANCEL` · `DEADLINE_EXCEEDED` · `RETRY_EXHAUSTED` · `GHOST_COMPENSATION` 등. **저장하지 않는다** (ERD 에 칸 없음) |
 
 ```json
