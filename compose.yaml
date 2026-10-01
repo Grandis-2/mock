@@ -28,6 +28,13 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
       # 부하 시험에서 커넥션이 몰린다
       - --max-connections=500
+      # 커밋마다 디스크 동기화를 하지 않는다(로그는 1초마다 내린다). 이 컨테이너 전용이다 — RDS 는 기본값(1 · 1) 그대로.
+      # Docker Desktop(WSL2) 디스크는 동기화가 느리고 들쭉날쭉해 COMMIT 이 평균 29ms · p99 200ms 까지 걸렸고,
+      # 500 RPS 에서 풀 30 의 여유(트랜잭션당 60ms)가 깨져 부하 판정이 Mock 이 아니라 디스크를 쟀다.
+      # 완화하면 COMMIT 평균 0.49ms · p99 4.8ms, 판정 14회 모두 통과(2026-10-01, docs/load-test.md).
+      # 잃는 것은 OS · 가상 머신이 죽을 때 마지막 1초 정도다. Mock 프로세스를 죽이는 재기동 시나리오는 영향 없다.
+      - --innodb-flush-log-at-trx-commit=2
+      - --sync-binlog=0
     volumes:
       # 최초 기동 때 한 번 실행된다. 스키마를 바꿨으면 볼륨을 지우고 다시 띄운다(docker compose down -v)
       - ./docs/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
