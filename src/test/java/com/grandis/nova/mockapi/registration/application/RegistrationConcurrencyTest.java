@@ -233,7 +233,7 @@ class RegistrationConcurrencyTest {
                 .contains(repository.findById(key).orElseThrow().externalNumber());
     }
 
-    /** 기다린 끝의 404 여야 확정 근거다. 롤백된 등록은 없던 일이니 기다린 뒤 404 가 맞다. */
+    /** 기다린 끝의 404 여야 트랜잭션 안의 등록을 놓치지 않은 것이다. 롤백된 등록은 없던 일이니 기다린 뒤 404 가 맞다. */
     @Test
     @DisplayName("기다리던 등록이 롤백되면 키 조회는 그 뒤에 404 다")
     void byKeyReturns404AfterRollback() throws Exception {

@@ -13,7 +13,7 @@ public enum ErrorCode {
     /** 필수 값 누락 등 계약·설정 오류. */
     INVALID_REQUEST(HttpStatus.BAD_REQUEST, "요청이 올바르지 않습니다.", false),
 
-    /** 조회 대상 없음. by-key 조회의 404 는 "등록되지 않았다" 의 확정 근거로 쓰인다. */
+    /** 조회 대상 없음. by-key 조회의 404 는 "지금 등록이 없다" 는 뜻이다(지연 중인 등록은 포함하지 않는다). */
     NOT_FOUND(HttpStatus.NOT_FOUND, "대상을 찾을 수 없습니다.", false),
 
     /** 취소 표식이 있는 키. 확정하지 않고 현재 상태로 정리한다. */

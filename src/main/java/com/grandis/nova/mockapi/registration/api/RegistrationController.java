@@ -51,7 +51,7 @@ public class RegistrationController {
         return RegistrationResponse.from(reader.findByNumber(externalNumber));
     }
 
-    /** 키로 등록 상태 조회. 응답 유실 뒤 재시도 전에 워커가 부른다. 404 는 "등록되지 않았다" 의 확정 근거다. */
+    /** 키로 등록 상태 조회. 응답 유실 뒤 재시도 전에 워커가 부른다. 404 는 "지금 등록이 없다" 는 뜻이다. */
     @GetMapping("/by-key/{externalKey}")
     public KeyStatusResponse findByKey(@PathVariable String externalKey) {
         Identifiers.requireLength("externalKey", externalKey);
