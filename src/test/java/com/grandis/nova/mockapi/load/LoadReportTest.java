@@ -79,6 +79,21 @@ class LoadReportTest {
         assertThat(verdict.result()).as(failures(verdict)).isEqualTo(Verdict.Result.PASS);
     }
 
+    /** 앞 실행이 확인용 등록 직후에 멈췄고 초기화를 빠뜨렸다. 이번 확인용 키가 아니면 남의 행이다. */
+    @Test
+    @DisplayName("이번 실행의 것이 아닌 확인용 행은 우리 키가 아닌 행으로 센다")
+    void staleCanaryIsForeign() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 95, 5);
+        rows.put("canary-old", "R-old");
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), http5xx(0.05, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("우리 키가 아닌 행"));
+    }
+
     @Test
     @DisplayName("주입이 아닌 500(처리 못 한 오류)이 하나라도 있으면 FAIL — 5% 에 섞이지 않는다")
     void unhandledServerErrorFails() {

@@ -237,13 +237,13 @@ public final class LoadReport {
     }
 
     /**
-     * 우리가 보낸 키가 아닌 행. 판정 전에 초기화했으면 0 이어야 한다. 확인용 등록({@link #CANARY_PREFIX})은
-     * 우리가 넣은 것이라 세지 않는다.
+     * 우리가 보낸 키가 아닌 행. 판정 전에 초기화했으면 0 이어야 한다. <b>이번 실행의</b> 확인용 등록은 우리가 넣은
+     * 것이라 세지 않는다. 접두사만 보고 빼면 앞 실행이 남긴 확인용 행(초기화를 빠뜨린 흔적)이 숨는다.
      */
-    public int foreignRows(RegistrationSnapshot db) {
+    public int foreignRows(RegistrationSnapshot db, Canary canary) {
         return (int) db.numbersByKey().keySet().stream()
                 .filter(key -> !attempts.containsKey(key))
-                .filter(key -> !key.startsWith(CANARY_PREFIX))
+                .filter(key -> canary == null || !key.equals(canary.key()))
                 .count();
     }
 
@@ -255,7 +255,7 @@ public final class LoadReport {
      */
     static final String INJECTED_FAILURE_MESSAGE = ErrorCode.UPSTREAM_UNAVAILABLE.defaultMessage();
 
-    /** 원장이 이 Mock 의 것인지 확인하려고 부하 직전에 넣는 등록의 키 접두사. 대조에서 뺀다. */
+    /** 원장이 이 Mock 의 것인지 확인하려고 부하 직전에 넣는 등록의 키 접두사. 원장에서 눈으로 가려내는 표식이다. */
     public static final String CANARY_PREFIX = "canary-";
 
     /** 99.9% 양측 구간의 z. 실패율이 우연으로 범위를 벗어날 확률을 0.1% 로 둔다. */
@@ -333,7 +333,7 @@ public final class LoadReport {
         if (db != null) {
             int mismatches = verifyAgainst(db).size();
             checks.add(contract("키 대조 위반 0건", mismatches == 0, mismatches + "건"));
-            int foreign = foreignRows(db);
+            int foreign = foreignRows(db, f.canary());
             checks.add(contract("우리 키가 아닌 행 0건", foreign == 0, foreign + "건"));
         }
         long withoutHeader = respondedWithoutInjected();
@@ -511,7 +511,7 @@ public final class LoadReport {
         appendCount(out, "미전송", counts.get(Outcome.NOT_SENT), "미전송");
         out.append("| 합계 | ").append(total()).append(" | 100.0% | |\n\n");
 
-        appendVerification(out, plan, counts, db);
+        appendVerification(out, plan, counts, db, facts.canary());
 
         out.append("## 거절 내역 (응답을 받은 것)\n\n");
         if (byStatus().isEmpty()) {
@@ -644,7 +644,7 @@ public final class LoadReport {
      * 지켰다는 것</b>이다.
      */
     private void appendVerification(StringBuilder out, LoadPlan plan,
-                                    Map<Outcome, Integer> counts, RegistrationSnapshot db) {
+                                    Map<Outcome, Integer> counts, RegistrationSnapshot db, Canary canary) {
         if (db == null) {
             // 조회에 실패해도 보고서는 남긴다. 실패한 실행을 기록에서 빼면 "조회 실패" 가 "불일치 0건" 처럼 보인다.
             out.append("## DB 대조 (합격의 본체)\n\n**원장을 읽지 못했다 — 대조하지 않았다.** ")
@@ -653,7 +653,7 @@ public final class LoadReport {
         }
         List<Mismatch> mismatches = verifyAgainst(db);
         boolean sumMatches = total() == plan.totalRequests();
-        int foreign = foreignRows(db);
+        int foreign = foreignRows(db, canary);
         long unknownKept = unknownWithRow(db);
 
         out.append("## DB 대조 (합격의 본체)\n\n");

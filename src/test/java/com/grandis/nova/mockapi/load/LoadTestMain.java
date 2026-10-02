@@ -155,7 +155,7 @@ public final class LoadTestMain {
     /**
      * 확인용 등록. 지연 · 실패를 끈 채 하나 넣고 받은 번호를 돌려준다. 실패하면 null 이고, 판정은 "판정 불가" 가 된다.
      *
-     * <p>설정을 바꾸므로 반드시 시나리오를 걸기 전에 부른다. 이 등록은 대조에서 빠진다({@link LoadReport#CANARY_PREFIX}).
+     * <p>설정을 바꾸므로 반드시 시나리오를 걸기 전에 부른다. 이 키 하나만 대조에서 빠진다({@link LoadReport#foreignRows}).
      */
     private static LoadReport.Canary registerCanary(String baseUrl) {
         String key = LoadReport.CANARY_PREFIX + java.util.UUID.randomUUID();
