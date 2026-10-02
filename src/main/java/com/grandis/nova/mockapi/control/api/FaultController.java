@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.control.api;
 
+import com.grandis.nova.mockapi.global.chaos.FaultType;
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.global.validation.Identifiers;
 import jakarta.validation.Valid;
@@ -49,9 +50,11 @@ public class FaultController {
     public FaultResponse inject(@Valid @RequestBody FaultRequest request) {
         // 등록이 받지 않는 키에 걸면 그 키로는 등록이 안 돼 결함이 영원히 발동하지 않는다. 같은 규칙으로 거른다.
         Identifiers.requireFormat("externalKey", request.externalKey());
-        store.inject(request.externalKey(), request.faultType());
+        long delayMs = request.delayMsOrZero();
+        store.inject(request.externalKey(), request.faultType(), delayMs);
         // 시각은 밀리초까지다. 등록 원장이 저장·응답을 맞추려고 자르는 것과 같은 자리수로 맞춘다.
         return new FaultResponse(request.externalKey(), request.faultType(),
+                request.faultType() == FaultType.SLOW_SUCCESS ? delayMs : null,
                 Instant.now().truncatedTo(ChronoUnit.MILLIS));
     }
 }
