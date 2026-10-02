@@ -101,7 +101,6 @@ public record RegistrationSnapshot(
         }
     }
 
-    /** 번호가 null 인 행(등록 전 취소 표식)도 담는다. 키가 있다는 것 자체가 판정에 쓰인다. */
     /**
      * MySQL 의 커밋 동기화 설정. 보고서의 실행 조건에 적는다.
      *
@@ -120,6 +119,7 @@ public record RegistrationSnapshot(
         }
     }
 
+    /** 번호가 null 인 행(등록 전 취소 표식)도 담는다. 키가 있다는 것 자체가 판정에 쓰인다. */
     private static Map<String, String> readRows(Connection connection) throws SQLException {
         Map<String, String> byKey = new HashMap<>();
         try (Statement statement = connection.createStatement();
