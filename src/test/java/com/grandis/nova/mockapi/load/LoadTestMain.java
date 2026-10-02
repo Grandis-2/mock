@@ -74,11 +74,20 @@ public final class LoadTestMain {
         String dbUser = args.length > 5 ? args[5] : DEFAULT_DB_USER;
         String dbPassword = args.length > 6 ? args[6] : DEFAULT_DB_PASSWORD;
 
+        // 인자부터 검사한다. 잘못된 시나리오 · 패스로 Mock 설정만 바꿔 놓고 끝나지 않게 Mock 을 건드리기 전에 거른다.
+        String scenarioConfig = scenarioConfig(scenario);
+        LoadPlan plan = switch (pass) {
+            case "classify" -> LoadPlan.classify(baseUrl, requests);
+            case "latency" -> LoadPlan.latency(baseUrl, requests);
+            default -> throw new IllegalArgumentException(
+                    "패스는 classify 또는 latency 여야 합니다. 받은 값: " + pass);
+        };
+
         // 시나리오를 걸기 전에 확인용 등록을 하나 넣는다. 끝나고 원장에서 이 키를 찾지 못하면 엉뚱한 DB 를
         // 읽은 것이다 — JDBC 인자를 빠뜨려 빈 원장을 읽어도 timeout 시나리오의 "결과 불명 키의 행 0" 은
         // 통과해 버린다(리뷰 H3 ⑤).
         LoadReport.Canary canary = registerCanary(baseUrl);
-        applyScenario(baseUrl, scenario);
+        put(baseUrl + CONFIG, scenarioConfig);
         String configBody = get(baseUrl + CONFIG);
         String failureMode = configBody.contains("\"failureMode\":\"TIMEOUT\"") ? "TIMEOUT" : "HTTP_5XX";
         double failureRate = readDecimal(configBody, "failureRate", 0.0);
@@ -92,12 +101,6 @@ public final class LoadTestMain {
         // 포기할 때까지 떠 있으므로 동시 요청 상한을 계산할 때 따로 센다.
         double heldFraction = "TIMEOUT".equals(failureMode) ? failureRate : 0.0;
 
-        LoadPlan plan = switch (pass) {
-            case "classify" -> LoadPlan.classify(baseUrl, requests);
-            case "latency" -> LoadPlan.latency(baseUrl, requests);
-            default -> throw new IllegalArgumentException(
-                    "패스는 classify 또는 latency 여야 합니다. 받은 값: " + pass);
-        };
         System.out.printf("시나리오 %s · 패스 %s · %d건 / %s · 타임아웃 %s · configVersion %d%n",
                 scenario, plan.pass(), plan.totalRequests(), plan.rampUp(),
                 plan.responseTimeout(), configVersion);
@@ -145,6 +148,7 @@ public final class LoadTestMain {
         System.out.println("보고서: " + out.toAbsolutePath());
         System.out.println((warmup ? "예열 (참고) " : "") + "판정: " + verdict.result().label());
         // 스크립트로 여러 번 돌릴 때 보고서를 열지 않고 거른다. PASS 0 · FAIL 1 · 판정 불가 2. 예열은 늘 0.
+        // ./gradlew loadTest 를 거치면 Gradle 이 0 이 아닌 값을 모두 1 로 끝내므로, 그때는 위의 "판정: …" 줄로 가른다.
         System.exit(warmup ? 0 : verdict.result().exitCode());
     }
 
@@ -180,12 +184,16 @@ public final class LoadTestMain {
     }
 
     /**
-     * 시나리오에 맞게 Mock 설정을 바꾼다.
+     * 시나리오에 맞는 Mock 설정 본문. 없는 시나리오면 예외 — Mock 에 아무것도 보내기 전에 부른다.
      *
      * <p>설정 경로에는 지연·실패를 주입하지 않으므로 실패율 1.0 상태에서도 되돌릴 수 있다.
+     *
+     * <p>설정 PUT 자체가 실패했을 때 원래 값으로 되돌리지는 않는다. 정상 실행도 끝난 뒤 시나리오 설정을 그대로
+     * 두고, 남는 것은 확인용 등록의 지연 0 · 실패 0 이라 다음 실행을 흔들지 않는다. 같은 PUT 이 실패한 상황이면
+     * 되돌리는 PUT 도 실패하기 쉽다.
      */
-    private static void applyScenario(String baseUrl, String scenario) throws Exception {
-        String body = switch (scenario) {
+    private static String scenarioConfig(String scenario) {
+        return switch (scenario) {
             case "baseline" -> """
                     {"registerLatencyMs":500,"failureRate":0.05,"failureMode":"HTTP_5XX"}""";
             case "latency" -> """
@@ -195,7 +203,6 @@ public final class LoadTestMain {
             default -> throw new IllegalArgumentException(
                     "시나리오는 baseline · latency · timeout 중 하나여야 합니다. 받은 값: " + scenario);
         };
-        put(baseUrl + CONFIG, body);
     }
 
     private static void put(String url, String body) throws Exception {
