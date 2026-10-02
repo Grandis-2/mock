@@ -41,7 +41,8 @@ dependencies {
 
 tasks.named('processResources') {
     // 예시 설정은 사람이 복사해 application.yml 을 만드는 원본이다. 실행 중에는 읽히지 않으므로 jar 에 싣지 않는다
-    // (외부 리뷰 L6). 접속 정보 같은 값이 산출물에 따라 나가지 않게 하는 뜻도 있다.
+    // (외부 리뷰 L6). 각자 복사한 application.yml 은 여전히 jar 에 들어간다 — 실제 설정을 jar 밖에서 주는 것은
+    // 배포(NV-194)에서 정한다.
     exclude 'application.yml.example'
 }
 

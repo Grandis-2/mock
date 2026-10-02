@@ -33,7 +33,7 @@ com.grandis.nova.mockapi/
 │   ├── error/      오류 코드 · 응답 형식 · 예외 핸들러
 │   └── validation/ 키 · 번호 형식 규칙(Identifiers) — 등록 파트 · 제어 파트(결함 키)가 같이 쓴다
 ├── registration/   등록 원장 — 등록 · 조회 · 취소 · 멱등 판정 · 채번
-│   ├── api/          컨트롤러 · 요청·응답 DTO · 키 길이 검사
+│   ├── api/          컨트롤러 · 요청·응답 DTO (키 · 번호 형식은 global/validation 의 Identifiers 를 부른다)
 │   ├── application/  처리 순서 · 트랜잭션 경계 — Service · Writer · Reader · 중복 키 재시도
 │   └── domain/       원장 행(엔티티) · 리포지토리 · 채번
 └── control/        Mock 조작 — 설정 · 결함 주입 · 초기화 API
