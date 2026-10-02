@@ -72,4 +72,7 @@ mock:
 
 logging:
   level:
-    com.grandis.nova.mockapi: DEBUG
+    # INFO 가 기본이다. DEBUG 로 내리면 결함 발동("응답을 보내지 않는다") · 클라이언트가 먼저 끊은 요청 ·
+    # 중복 키 재시도가 한 줄씩 찍힌다. 부하 판정에서는 요청마다 찍혀 로그만 수만 줄이 되므로 켜지 않는다.
+    # 잠깐 볼 때는 파일을 고치지 않고 기동 인자로 켠다 — docs/operations.md 0장.
+    com.grandis.nova.mockapi: INFO
