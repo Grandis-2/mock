@@ -27,7 +27,9 @@ cross-database 조회나 물리 FK 를 두지 않는다. 재기동해도 등록 
 com.grandis.nova.mockapi/
 ├── global/
 │   ├── chaos/      설정 스냅샷 · 지연·실패 주입 · 결함
-│   ├── config/     MockProperties (지연 평균·지터·실패율·타임아웃 유지 시간 기본값) · 엄격한 JSON(모르는 필드 · 값이 바뀌는 타입 변환 · 중복 필드 거절, 정수 → 실수만 받음) · 응답 시각 형식
+│   ├── config/     MockProperties — 지연 평균·지터·실패율·유지 시간·워커 타임아웃 기본값, 유지 ≥ 워커 + 2초 기동 검증
+│   │               VirtualThreadGuard — 가상 스레드가 꺼져 있으면 기동 실패
+│   │               엄격한 JSON(모르는 필드 · 값이 바뀌는 타입 변환 · 중복 필드 거절, 정수 → 실수만 받음) · 응답 시각 형식
 │   ├── error/      오류 코드 · 응답 형식 · 예외 핸들러
 │   └── validation/ 키 · 번호 형식 규칙(Identifiers) — 등록 파트가 쓴다(제어 파트의 결함 키는 아래 참고)
 ├── registration/   등록 원장 — 등록 · 조회 · 취소 · 멱등 판정 · 채번
@@ -35,8 +37,8 @@ com.grandis.nova.mockapi/
 │   ├── application/  처리 순서 · 트랜잭션 경계 — Service · Writer · Reader · 중복 키 재시도
 │   └── domain/       원장 행(엔티티) · 리포지토리 · 채번
 └── control/        Mock 조작 — 설정 · 결함 주입 · 초기화 API
-    ├── api/          컨트롤러 · 요청·응답 DTO
-    └── application/  초기화
+    ├── api/          컨트롤러 · 요청·응답 DTO · 초기화 장벽 필터(등록 · 취소 POST 만)
+    └── application/  초기화 · 초기화 장벽(진행 중인 등록 · 취소가 있으면 409 RESET_BUSY)
 ```
 
 **패키지는 같이 바뀌는 것끼리 묶는다.** `api` 는 [api.md](api.md) 가 바뀔 때, `application` 은 아래 처리
