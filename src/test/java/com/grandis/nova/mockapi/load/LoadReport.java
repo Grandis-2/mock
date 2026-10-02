@@ -236,8 +236,10 @@ public final class LoadReport {
                 .count();
     }
 
-    /** 우리가 보낸 키가 아닌 행. 판정 전에 초기화했으면 0 이어야 한다. */
-    /** 우리가 보낸 키가 아닌 행. 확인용 등록({@link #CANARY_PREFIX})은 우리가 넣은 것이라 세지 않는다. */
+    /**
+     * 우리가 보낸 키가 아닌 행. 판정 전에 초기화했으면 0 이어야 한다. 확인용 등록({@link #CANARY_PREFIX})은
+     * 우리가 넣은 것이라 세지 않는다.
+     */
     public int foreignRows(RegistrationSnapshot db) {
         return (int) db.numbersByKey().keySet().stream()
                 .filter(key -> !attempts.containsKey(key))
@@ -406,15 +408,14 @@ public final class LoadReport {
     /**
      * @param configVersion 이 실행에 적용된 Mock 설정 버전 (요구사항 5.4)
      * @param configBody    같은 목적. 지연·실패율을 그대로 남긴다
-     * @param injected      Mock 이 일부러 넣은 지연의 분포. 시나리오가 타임아웃에 걸치는지 · 동시 요청 상한에 쓴다.
-     *                      오버헤드는 이게 아니라 요청마다 받은 헤더로 계산한다
+     * @param facts         실행 중에 모은 사실 — 주입 지연의 분포(시나리오가 타임아웃에 걸치는지 · 동시 요청 상한),
+     *                      원장, 확인용 등록. 오버헤드는 분포가 아니라 요청마다 받은 헤더로 계산한다
      * @param heldFraction  Mock 이 응답 없이 붙잡는 요청의 비율. 동시 요청 상한을 계산하는 데 쓴다
      * @param maxInFlight   동시에 떠 있던 요청의 최대치. 서버 쪽 커넥션 수의 대용값이다
      * @param elapsed       첫 발사부터 마지막 응답까지
-     */
-    /**
-     * @param runLabel 이 실행이 판정인지 예열인지. 예열은 결과를 버리므로 제목에 밝힌다 — 보고서만 보고 판정 15회를
-     *                 골라낼 수 있어야 한다
+     * @param verdict       {@link #judge} 의 결과. 보고서 맨 위에 찍는다
+     * @param runLabel      이 실행이 판정인지 예열인지. 예열은 결과를 버리므로 제목에 밝힌다 — 보고서만 보고 판정
+     *                      15회를 골라낼 수 있어야 한다
      */
     public String render(LoadPlan plan, String configBody, int configVersion, Facts facts,
                          double heldFraction, int maxInFlight, Duration elapsed, Verdict verdict, String runLabel) {
@@ -566,12 +567,6 @@ public final class LoadReport {
     private static final int MISMATCH_SAMPLES = 10;
 
     /**
-     * 합격의 본체를 적는다. 지표(p95 · 에러율)보다 이쪽이 먼저다.
-     *
-     * <p>Mock 이 증명할 것은 빠르다는 게 아니라 <b>부하 중에도 "실패는 커밋 전" 이라는 약속을
-     * 지켰다는 것</b>이다.
-     */
-    /**
      * 미전송이 있으면 <b>부하가 서버에 다 도달하지 못한 것</b>이라 경고한다. 판정에서 빼지는 않는다.
      *
      * <p>발사 지연만으로는 이 경우를 못 잡는다. 가상 스레드가 제시간에 깨어나 요청을 내보내는 것은
@@ -642,6 +637,12 @@ public final class LoadReport {
                 .append("> 종료 코드 PASS 0 · FAIL 1 · 판정 불가 2.\n\n");
     }
 
+    /**
+     * 합격의 본체를 적는다. 지표(p95 · 에러율)보다 이쪽이 먼저다.
+     *
+     * <p>Mock 이 증명할 것은 빠르다는 게 아니라 <b>부하 중에도 "실패는 커밋 전" 이라는 약속을
+     * 지켰다는 것</b>이다.
+     */
     private void appendVerification(StringBuilder out, LoadPlan plan,
                                     Map<Outcome, Integer> counts, RegistrationSnapshot db) {
         if (db == null) {
