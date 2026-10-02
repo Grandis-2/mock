@@ -58,14 +58,24 @@ public class MockConfigStore implements ConfigProvider {
      *
      * @return 실제로 적용된 값. 요청값을 그대로 돌려주지 않는다
      */
-    public Applied update(int registerLatencyMs, double failureRate, FailureMode failureMode) {
+    public Applied update(int registerLatencyMs, LatencyTail latencyTail, double failureRate,
+                          FailureMode failureMode) {
         return current.updateAndGet(old -> new Applied(
                 new ConfigSnapshot(
                         registerLatencyMs,
                         failureRate,
                         failureMode,
-                        old.snapshot().configVersion() + 1),
+                        old.snapshot().configVersion() + 1,
+                        latencyTail),
                 now()));
+    }
+
+    /**
+     * 꼬리 없이 바꾼다. 설정 API 에서 꼬리 칸을 생략한 것과 같다 — 앞 설정의 꼬리를 남기지 않는다.
+     * 꼬리를 들이기 전부터 시험들이 이 모양으로 설정을 바꾸고 되돌린다.
+     */
+    public Applied update(int registerLatencyMs, double failureRate, FailureMode failureMode) {
+        return update(registerLatencyMs, LatencyTail.NONE, failureRate, failureMode);
     }
 
     /**
