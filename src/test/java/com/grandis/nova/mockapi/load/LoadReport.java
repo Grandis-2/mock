@@ -237,6 +237,19 @@ public final class LoadReport {
     }
 
     /**
+     * 결과 불명 중 원장에 <b>등록으로</b>(번호가 있는 행) 남은 것. 취소 표식(번호 없음)은 세지 않는다.
+     *
+     * <p>타임아웃을 넘기는 꼬리(NV-260)에서 쓴다. 워커가 포기한 뒤에 커밋되는 것이 그 시나리오의 목적이라, 결과
+     * 불명 키가 하나라도 ACTIVE 가 아니면 늦은 커밋이 일어나지 않은 것이다.
+     */
+    public long unknownActive(RegistrationSnapshot db) {
+        return all().stream()
+                .filter(a -> a.outcome() == Outcome.UNKNOWN)
+                .filter(a -> db.numberOf(a.externalKey()) != null)
+                .count();
+    }
+
+    /**
      * 우리가 보낸 키가 아닌 행. 판정 전에 초기화했으면 0 이어야 한다. <b>이번 실행의</b> 확인용 등록은 우리가 넣은
      * 것이라 세지 않는다. 접두사만 보고 빼면 앞 실행이 남긴 확인용 행(초기화를 빠뜨린 흔적)이 숨는다.
      */
@@ -299,6 +312,9 @@ public final class LoadReport {
      * <p>시나리오마다 규칙이 다르다. {@code HTTP_5XX} 는 결과 불명이 0 이어야 하고 5xx 가 실패율만큼 나와야
      * 하며, {@code TIMEOUT} 은 결과 불명이 전부여야 하고 그 키들이 원장에 하나도 없어야 한다(커밋 전에 끊는다).
      * 예전에는 결과 불명이 대조에서 빠져, {@code timeout} 에서 끊기 전에 커밋하는 회귀가 생겨도 통과했다(⑤).
+     *
+     * <p>타임아웃을 일부러 넘기는 꼬리({@code tail-over-timeout}, NV-260)는 반대다 — 결과 불명이 꼬리 비율만큼
+     * 나와야 하고, 그 키들이 <b>전부 원장에 ACTIVE</b> 여야 한다. 워커가 포기한 뒤에 늦게 커밋되는 것이 목적이다.
      */
     public Verdict judge(LoadPlan plan, Facts f) {
         Map<Outcome, Integer> counts = byOutcome();
@@ -306,6 +322,7 @@ public final class LoadReport {
         int unknown = counts.get(Outcome.UNKNOWN);
         int notSent = counts.get(Outcome.NOT_SENT);
         boolean http5xx = "HTTP_5XX".equals(f.failureMode());
+        boolean lateCommit = f.injected().tailOverTimeout(plan.responseTimeout());
         RegistrationSnapshot db = f.db();
         List<Verdict.Check> checks = new ArrayList<>();
 
@@ -315,9 +332,13 @@ public final class LoadReport {
         checks.add(validity("미전송 0건 — 부하가 서버에 다 닿았다", notSent == 0, notSent + "건"));
         if (http5xx) {
             checks.add(validity("시나리오가 응답 타임아웃 안에 든다", plan.leavesRoomFor(f.injected()),
-                    "주입 최대 " + f.injected().percentileMs(100) + "ms + 허용 "
-                            + plan.maxP99Overhead().toMillis() + "ms · 타임아웃 "
-                            + plan.responseTimeout().toMillis() + "ms"));
+                    plan.roomDetail(f.injected())));
+        }
+        if (lateCommit) {
+            // 꼬리 요청 일부가 주사위에 걸리면 6초 뒤 500 으로 끝나는데 클라이언트는 이미 포기했다. 그러면 "결과 불명
+            // 키는 전부 원장에 있다" 를 단정할 수 없다
+            checks.add(validity("타임아웃을 넘기는 꼬리는 실패율 0 으로 돈다", f.failureRate() == 0,
+                    "실패율 " + f.failureRate()));
         }
         checks.add(validity("원장 조회", db != null, db != null ? db.rowCount() + "행" : f.dbError()));
         boolean canaryFound = db != null && f.canary() != null && db.has(f.canary().key())
@@ -341,9 +362,20 @@ public final class LoadReport {
         long nonInjected = nonInjectedServerErrors();
         checks.add(contract("주입이 아닌 5xx 0건 — 처리 못 한 오류 · 재시도 상한 · 빈 500",
                 nonInjected == 0, nonInjected + "건"));
-        if (http5xx) {
+        if (http5xx && lateCommit) {
+            // 몸통은 제시간이고 꼬리는 전부 넘으므로 결과 불명 수 = 꼬리에 걸린 수다(사전 검사가 보장)
+            double tailRate = f.injected().tail().rate();
+            checks.add(rangeCheck("결과 불명이 꼬리 비율 " + tailRate + " 의 99.9% 범위", unknown, sent, tailRate));
+            if (db != null) {
+                long active = unknownActive(db);
+                checks.add(contract("결과 불명 키 전부 원장에 ACTIVE — 워커가 포기한 뒤 커밋된다", active == unknown,
+                        active + " / " + unknown));
+            }
+        } else if (http5xx) {
             checks.add(contract("결과 불명 ≤ " + percent(plan.maxUnknownRate()),
                     unknown <= Math.floor(sent * plan.maxUnknownRate()), unknown + "건"));
+        }
+        if (http5xx) {
             int injectedFailures = counts.get(Outcome.TRANSIENT_FAILURE) - (int) nonInjected;
             checks.add(failureRateCheck(injectedFailures, (int) responded(), f.failureRate()));
         } else {
@@ -382,7 +414,8 @@ public final class LoadReport {
     private static Verdict.Check rangeCheck(String name, int observed, int n, double rate) {
         double mean = n * rate;
         double sd = Math.sqrt(n * rate * (1 - rate));
-        long low = (long) Math.floor(mean - Z_999 * sd);
+        // 기대값이 작으면(2,000건 · 0.5% = 10) 하한이 음수로 나온다. 건수는 0 아래로 갈 수 없어 0 으로 적는다
+        long low = Math.max(0, (long) Math.floor(mean - Z_999 * sd));
         long high = (long) Math.ceil(mean + Z_999 * sd);
         return contract(name, observed >= low && observed <= high,
                 observed + "건 (" + percent((double) observed / Math.max(n, 1)) + ") · 범위 " + low + " ~ " + high);
@@ -441,11 +474,10 @@ public final class LoadReport {
         appendNotSentWarning(out, counts.get(Outcome.NOT_SENT));
         if (!plan.leavesRoomFor(injected)) {
             out.append("> ## ⚠ 시나리오가 응답 타임아웃에 걸쳐 있다 — 결과 불명을 Mock 탓으로 읽지 않는다\n>\n");
-            out.append("> 주입한 지연이 최대 **").append(injected.percentileMs(100))
-                    .append("ms** 까지 뽑히고 허용 오버헤드(p99 ").append(plan.maxP99Overhead().toMillis())
-                    .append("ms)를 더하면 응답 타임아웃 ").append(plan.responseTimeout().toMillis())
-                    .append("ms 를 넘는다.\n> Mock 이 기준대로 빨라도 꼬리의 요청은 결과 불명이 된다. ")
-                    .append("시나리오의 지연을 낮추거나 타임아웃을 조정해야 판정에 쓸 수 있다.\n\n");
+            out.append("> ").append(plan.roomDetail(injected))
+                    .append(" — 응답 타임아웃을 넘는다.\n> Mock 이 기준대로 빨라도 꼬리의 요청은 결과 불명이 된다. ")
+                    .append("시나리오의 지연을 낮추거나 타임아웃을 조정해야 판정에 쓸 수 있다. 꼬리를 일부러 넘기려면 ")
+                    .append("꼬리 하한이 타임아웃보다 길어야 한다(걸치면 일부만 넘어 가를 수 없다).\n\n");
         }
         out.append("> 조건은 2026-09-28 합의됐다. **이 실행이 판정하는 것은 ")
                 .append(plan.pass() == LoadPlan.Pass.CLASSIFY ? "분류" : "응답 지연")
@@ -474,7 +506,7 @@ public final class LoadReport {
         out.append("## 적용한 Mock 설정 (요구사항 5.4)\n\n");
         out.append("| 항목 | 값 |\n| --- | --- |\n");
         out.append("| configVersion | ").append(configVersion).append(" |\n");
-        out.append("| 지연 평균 · 지터 | ").append(injected.describe()).append(" |\n");
+        out.append("| 지연 (평균 · 지터 · 꼬리) | ").append(injected.describe()).append(" |\n");
         out.append("| 유지 시간 · 워커 타임아웃 | ").append(field(configBody, "timeoutHoldMs")).append("ms · ")
                 .append(field(configBody, "workerReadTimeoutMs")).append("ms |\n");
         out.append("| 커넥션 풀 | 클라이언트에서 볼 수 없다 — Mock 의 `maximum-pool-size` 를 함께 적는다(합의값 30) |\n");
@@ -490,8 +522,13 @@ public final class LoadReport {
                 .append(" |\n");
         out.append("| 관찰 종료 조건 | 발사 후 ").append(plan.drainTimeout())
                 .append(" | 응답 타임아웃보다 길어야 한다 (코드가 강제) |\n");
-        out.append("| 결과 불명 허용 | ").append(percent(plan.maxUnknownRate()))
-                .append(" | HTTP_5XX 모드. 응답이 없다는 것은 제시간에 못 답했다는 뜻이다 |\n");
+        if (injected.tailOverTimeout(plan.responseTimeout())) {
+            out.append("| 결과 불명 허용 | 꼬리 비율 ").append(percent(injected.tail().rate()))
+                    .append("의 99.9% 범위 | 타임아웃을 넘기는 꼬리. 꼬리 요청은 결과 불명이고 전부 원장에 ACTIVE 여야 한다 |\n");
+        } else {
+            out.append("| 결과 불명 허용 | ").append(percent(plan.maxUnknownRate()))
+                    .append(" | HTTP_5XX 모드. 응답이 없다는 것은 제시간에 못 답했다는 뜻이다 |\n");
+        }
         out.append("| 오버헤드 기준 | p95 ").append(plan.maxP95Overhead().toMillis())
                 .append("ms · p99 ").append(plan.maxP99Overhead().toMillis())
                 .append("ms | 요청마다 관측 − 그 요청에 뽑힌 지연, 그 분포의 백분위. 2026-09-28 실측으로 확정 |\n");
@@ -553,7 +590,7 @@ public final class LoadReport {
         out.append("| **미완료(결과 불명)** | ").append(counts.get(Outcome.UNKNOWN))
                 .append("건 | — | — | — | 위 대조 참고 |\n");
         out.append("| 최대 동시 요청 | ").append(maxInFlight).append(" | — | — | ")
-                .append(expectedInFlight(plan, injected.meanMs(), heldFraction))
+                .append(expectedInFlight(plan, injected, heldFraction))
                 .append(" | 넘으면 어딘가에서 대기가 쌓였다 |\n");
         out.append("| 전체 소요 | ").append(elapsed.toMillis()).append("ms | — | — | — | — |\n\n");
 
@@ -606,17 +643,23 @@ public final class LoadReport {
      *
      * <p>다만 넘었다고 원인이 Mock 이라는 뜻은 아니다. PC 가 멈칫해도 넘는다. 그 구분은 발사 지연이 한다.
      *
+     * <p>타임아웃을 넘기는 꼬리(NV-260)에 걸린 요청도 클라이언트가 포기할 때까지 떠 있으므로 붙잡는 쪽에 넣고, 나머지는
+     * 몸통 평균으로 센다. 타임아웃 안의 꼬리는 전체 평균이 그대로라 따로 셀 것이 없다.
+     *
      * @param heldFraction Mock 이 응답 없이 붙잡는 요청의 비율. {@code TIMEOUT} 모드면 실패율, 아니면 0
      */
-    private static String expectedInFlight(LoadPlan plan, int registerLatencyMs, double heldFraction) {
+    private static String expectedInFlight(LoadPlan plan, InjectedLatency injected, double heldFraction) {
         if (plan.rampUp().isZero()) {
             return "—";
         }
+        boolean lateCommit = injected.tailOverTimeout(plan.responseTimeout());
+        double answeredMs = lateCommit ? injected.bodyMeanMs() : injected.meanMs();
+        double held = lateCommit ? heldFraction + injected.tail().rate() : heldFraction;
         double rps = (double) plan.totalRequests() / plan.rampUp().toSeconds();
         long overheadMs = plan.maxP95Overhead().toMillis();
-        double answeredSec = (registerLatencyMs + overheadMs) / 1000.0;
+        double answeredSec = (answeredMs + overheadMs) / 1000.0;
         double heldSec = (plan.responseTimeout().toMillis() + overheadMs) / 1000.0;
-        double perRequestSec = (1 - heldFraction) * answeredSec + heldFraction * heldSec;
+        double perRequestSec = (1 - held) * answeredSec + held * heldSec;
         return "상한 ~" + Math.round(rps * perRequestSec);
     }
 

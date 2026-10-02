@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.load;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.grandis.nova.mockapi.global.chaos.LatencyTail;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -197,6 +198,111 @@ class LoadReportTest {
         assertThat(classify.result()).as("분류 패스는 오버헤드로 실패시키지 않는다").isEqualTo(Verdict.Result.PASS);
         assertThat(latency.result()).isEqualTo(Verdict.Result.FAIL);
         assertThat(failed(latency)).containsExactly("p99 오버헤드 ≤ 400ms");
+    }
+
+    // ---------------------------------------------------------------- 지연 꼬리 (NV-260)
+
+    private static final InjectedLatency OVER_TIMEOUT_TAIL =
+            new InjectedLatency(500, 0.4, new LatencyTail(0.005, 5500, 6500));
+
+    /** 5,000건 · 0.5% 면 99.9% 범위는 8 ~ 42건이다. 25건이 워커 타임아웃 뒤에 커밋됐다. */
+    @Test
+    @DisplayName("tail-over-timeout — 결과 불명이 꼬리 비율만큼이고 그 키가 전부 원장에 있으면 PASS")
+    void lateCommitPasses() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillLateCommit(report, rows, 4_975, 25);
+
+        LoadPlan plan = LoadPlan.classify(URL, 5_000);
+        Verdict verdict = report.judge(plan, lateCommit(0.0, rows));
+
+        assertThat(verdict.result()).as(failures(verdict)).isEqualTo(Verdict.Result.PASS);
+        // 보고서는 몸통만 본 사전 검사와 꼬리를 적고, 넘기는 꼬리를 붙잡히는 요청으로 세어 동시 요청 상한을 낸다
+        // (500 RPS × (0.995 × (472 + 250) + 0.005 × (5000 + 250))ms ≈ 373)
+        String rendered = report.render(plan, "{}", 1, lateCommit(0.0, rows), 0.0, 380, Duration.ofSeconds(17),
+                verdict, "판정");
+        assertThat(rendered)
+                .contains("꼬리 0.5% 5500 ~ 6500ms")
+                .contains("몸통 최대 ")
+                .contains("상한 ~373")
+                .doesNotContain("시나리오가 응답 타임아웃에 걸쳐 있다");
+    }
+
+    /** 늦은 커밋이 일어나지 않았다 — 꼬리에서 기다린 뒤 커밋하지 않고 버렸거나, 기다리는 중에 끊겼다. */
+    @Test
+    @DisplayName("tail-over-timeout — 결과 불명 키 하나라도 원장에 없으면 FAIL")
+    void lateCommitMissingRowFails() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillLateCommit(report, rows, 4_975, 25);
+        rows.remove("late3");
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 5_000), lateCommit(0.0, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).containsExactly("결과 불명 키 전부 원장에 ACTIVE — 워커가 포기한 뒤 커밋된다");
+    }
+
+    /** 몸통 요청까지 결과 불명이 됐다 — 꼬리 탓이 아니라 Mock 이 느리다. */
+    @Test
+    @DisplayName("tail-over-timeout — 결과 불명이 꼬리 비율 범위를 넘으면 FAIL")
+    void lateCommitTooManyUnknownFails() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillLateCommit(report, rows, 4_900, 100);
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 5_000), lateCommit(0.0, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("결과 불명이 꼬리 비율"));
+    }
+
+    /** 꼬리 요청이 주사위에 걸리면 6초 뒤 500 으로 끝나 원장에 없다. "전부 ACTIVE" 를 단정할 수 없는 실행이다. */
+    @Test
+    @DisplayName("tail-over-timeout 을 실패율 0 이 아닌 채로 돌리면 판정 불가")
+    void lateCommitWithFailureRateIsInvalid() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillLateCommit(report, rows, 4_975, 25);
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 5_000), lateCommit(0.05, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.INVALID);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("타임아웃을 넘기는 꼬리는 실패율 0"));
+    }
+
+    /** `tail`(4초까지)은 타임아웃 안이라 기존 규칙 그대로다 — 결과 불명 1건이면 Mock 이 느린 것이다. */
+    @Test
+    @DisplayName("tail — 타임아웃 안의 꼬리는 결과 불명 0 이 그대로 합격 조건이다")
+    void tailWithinTimeoutKeepsZeroUnknown() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 94, 5);
+        report.add(new LoadReport.Attempt("slow", null, Outcome.UNKNOWN, 0, Duration.ofSeconds(5)));
+        var tail = new InjectedLatency(500, 0.4, new LatencyTail(0.02, 2000, 4000));
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), new LoadReport.Facts("HTTP_5XX", 0.05, tail,
+                Duration.ofMillis(20), snapshot(rows), null, CANARY));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("결과 불명 ≤"));
+    }
+
+    /** 몸통 요청은 접수(행 있음), 꼬리 요청은 결과 불명이지만 워커가 포기한 뒤 커밋돼 원장에 있다. */
+    private static void fillLateCommit(LoadReport report, Map<String, String> rows, int accepted, int late) {
+        for (int i = 0; i < accepted; i++) {
+            add(report, "a" + i, 500, 540);
+            rows.put("a" + i, "R-a" + i);
+        }
+        for (int i = 0; i < late; i++) {
+            report.add(new LoadReport.Attempt("late" + i, null, Outcome.UNKNOWN, 0, Duration.ofSeconds(5)));
+            rows.put("late" + i, "R-late" + i);
+        }
+    }
+
+    private static LoadReport.Facts lateCommit(double failureRate, Map<String, String> rows) {
+        return new LoadReport.Facts("HTTP_5XX", failureRate, OVER_TIMEOUT_TAIL,
+                Duration.ofMillis(20), snapshot(rows), null, CANARY);
     }
 
     private static void fillHttp5xx(LoadReport report, Map<String, String> rows, int accepted, int injectedFailures) {

@@ -132,10 +132,24 @@ public record LoadPlan(
      * 부터 넘었다). 워커 타임아웃이 바뀌면 또 바뀌므로 사람이 기억하게 두지 않고 여기서 검사한다.
      *
      * <p>p99 허용치로 보는 이유 — 넘치는 건 꼬리의 요청들이다.
+     *
+     * <p><b>타임아웃을 일부러 넘기는 꼬리</b>({@code tail-over-timeout}, NV-260)는 몸통만 본다. 꼬리 하한이 타임아웃보다
+     * 길어 꼬리 요청은 전부 결과 불명이 되는 것이 목적이고, 몸통이 제시간이어야 결과 불명 수가 꼬리 수와 정확히
+     * 같아진다. 꼬리가 타임아웃에 <b>걸치면</b>(일부만 넘음) 이 예외에 들지 않고 전체 최대로 보므로 여기서 걸린다 —
+     * 결과 불명이 꼬리 탓인지 Mock 탓인지 가를 수 없는 설정이다.
      */
     public boolean leavesRoomFor(InjectedLatency injected) {
-        long worstMs = injected.percentileMs(100) + maxP99Overhead.toMillis();
-        return worstMs < responseTimeout.toMillis();
+        long latestMs = injected.tailOverTimeout(responseTimeout) ? injected.bodyMaxMs() : injected.maxMs();
+        return latestMs + maxP99Overhead.toMillis() < responseTimeout.toMillis();
+    }
+
+    /** {@link #leavesRoomFor} 가 본 값. 보고서 · 콘솔에 같은 숫자를 적는다. */
+    public String roomDetail(InjectedLatency injected) {
+        boolean over = injected.tailOverTimeout(responseTimeout);
+        long latestMs = over ? injected.bodyMaxMs() : injected.maxMs();
+        return (over ? "몸통 최대 " : "주입 최대 ") + latestMs + "ms + 허용 " + maxP99Overhead.toMillis()
+                + "ms · 타임아웃 " + responseTimeout.toMillis() + "ms"
+                + (over ? " (꼬리 " + injected.tail().minMs() + "ms~ 는 일부러 넘긴다)" : "");
     }
 
     /**
