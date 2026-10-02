@@ -3,6 +3,7 @@ package com.grandis.nova.mockapi.control.api;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -19,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 다시 보내라" 는 뜻이라 조작 패널이 낼 응답이 아니다.
  */
 @RestController
-@RequestMapping("/external/config")
+@RequestMapping(path = "/external/config", produces = MediaType.APPLICATION_JSON_VALUE)
 public class MockConfigController {
 
     private final MockConfigStore store;
@@ -42,7 +43,7 @@ public class MockConfigController {
      * <p>응답은 요청값이 아니라 저장소가 돌려준 <b>실제 적용값</b>이다. 받은 값을 그대로
      * 되돌려주면 적용 실패를 저장 성공으로 표시할 수 있다(요구사항 4.4).
      */
-    @PutMapping
+    @PutMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ConfigResponse update(@Valid @RequestBody ConfigUpdateRequest request) {
         return ConfigResponse.from(store.update(
                 request.registerLatencyMs(),

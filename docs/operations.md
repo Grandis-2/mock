@@ -49,6 +49,14 @@ APPLICATION FAILED TO START
     Reason: 다음 값 이하여야 합니다 1.0
 ```
 
+**로그 레벨은 INFO 다.** 예전에 복사한 `application.yml` 은 DEBUG 라 그대로 둬도 뜨지만, 결함 발동 · 클라이언트가
+먼저 끊은 요청 · 중복 키 재시도가 건마다 한 줄씩 찍힌다. 부하 판정에서는 수만 줄이 되니 INFO 로 고친다.
+잠깐 DEBUG 로 보고 싶으면 파일을 고치지 않고 기동 인자로 켠다.
+
+```bash
+./gradlew bootRun --args='--logging.level.com.grandis.nova.mockapi=DEBUG'
+```
+
 ```bash
 docker compose up -d      # 처음 뜰 때 docs/schema.sql 이 자동 실행된다
 ./gradlew bootRun         # http://localhost:8081

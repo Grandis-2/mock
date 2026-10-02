@@ -39,6 +39,13 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+tasks.named('processResources') {
+    // 예시 설정은 사람이 복사해 application.yml 을 만드는 원본이다. 실행 중에는 읽히지 않으므로 jar 에 싣지 않는다
+    // (외부 리뷰 L6). 각자 복사한 application.yml 은 여전히 jar 에 들어간다 — 실제 설정을 jar 밖에서 주는 것은
+    // 배포(NV-194)에서 정한다.
+    exclude 'application.yml.example'
+}
+
 tasks.named('test') {
     useJUnitPlatform()
     // 시간대 버그는 JVM 시간대가 UTC 가 아닐 때만 드러난다(DB 에 9시간 밀려 저장된 적이 있다).

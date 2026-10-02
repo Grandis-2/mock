@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.7 / 2026-10-01 (등록 응답에 `X-Mock-Injected-Latency-Ms` · 설정 조회에 유지 시간 · 워커 타임아웃) |
+| 버전 / 작성일 | 5.8 / 2026-10-02 (제어 API 도 헤더 검사를 처리 전에 · 결함 키를 등록 키와 같은 형식으로) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
 | 기준 | ERD v5 (`스마트폰 사전예약 + 최소 일반 판매 ERD · v5 · 2026-09-17`, dbdiagram) |
@@ -98,7 +98,7 @@ Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RE
 
 재시도해도 결과가 같은 요청은 반드시 4xx 다. 메서드 · `Content-Type` · `Accept` 가 틀려도 405 · 415 · 406 이 아니라 400 `INVALID_REQUEST` 이고, 무엇이 틀렸는지를 메시지에 담는다.
 
-등록 · 조회 · 취소는 헤더 검사를 **처리 전에** 한다. `Content-Type` 이 `application/json` 이 아니거나 `Accept` 가 JSON 을 받지 않는 요청은 아무것도 남기지 않는다. 오류 본문은 `Accept` 와 상관없이 JSON 이다.
+등록 · 조회 · 취소와 제어 API(설정 · 결함 · 초기화)는 헤더 검사를 **처리 전에** 한다. `Content-Type` 이 `application/json` 이 아니거나 `Accept` 가 JSON 을 받지 않는 요청은 아무것도 남기지 않는다 — 설정을 바꾸거나 결함을 걸거나 기록을 지우지 않는다. 오류 본문은 `Accept` 와 상관없이 JSON 이다.
 
 ## 요청 검증
 
@@ -793,7 +793,7 @@ Accept: application/json
 
 | 필드 | 타입 | 필수 | 제약 |
 | --- | --- | --- | --- |
-| `externalKey` | string | 필수 | 결함을 걸 키 |
+| `externalKey` | string | 필수 | 결함을 걸 키. 등록 키와 같은 형식(영문 · 숫자 · `. _ -` 1~100자) — 등록이 받지 않는 키에 걸면 발동할 수 없다 |
 | `faultType` | string | 필수 | `RESPONSE_LOST_AFTER_COMMIT`. 결함을 더 만들 때를 위해 필드로 둔다 |
 
 ```json
@@ -828,7 +828,7 @@ Accept: application/json
 
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
-| 400 | `INVALID_REQUEST` | 잘못된 `faultType` 등 |
+| 400 | `INVALID_REQUEST` | 잘못된 `faultType` · 형식이 틀린 `externalKey` · 헤더 오류 등. 결함을 걸지 않는다 |
 
 ---
 

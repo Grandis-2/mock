@@ -144,6 +144,21 @@ class MockConfigApiTest {
         assertThat(store.applied()).isEqualTo(before);
     }
 
+    /** 매핑에서 거르지 않으면 설정을 바꾼 뒤에야 응답을 못 써 4xx 가 나간다. 보낸 사람은 안 바뀐 줄 안다. */
+    @Test
+    @DisplayName("Accept 에 JSON 이 없으면 400 이고 현재 설정을 바꾸지 않는다")
+    void acceptWithoutJsonKeepsConfig() throws Exception {
+        var before = store.applied();
+
+        mvc.perform(put(PATH).contentType(MediaType.APPLICATION_JSON).accept(MediaType.TEXT_PLAIN)
+                        .content("""
+                                {"registerLatencyMs":900,"failureRate":0.5}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorMessage", containsString("Accept")));
+
+        assertThat(store.applied()).isEqualTo(before);
+    }
+
     /**
      * {@code timeoutHoldMs} 는 설정 API 의 필드가 아니라 환경변수다. 워커 읽기 타임아웃에 맞춰
      * 기동할 때 정하는 값이라 실행 중에 바꾸면 그 순간 붙잡고 있던 요청과 어긋난다.

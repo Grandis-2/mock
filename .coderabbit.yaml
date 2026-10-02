@@ -131,6 +131,10 @@ reviews:
         리뷰 반영 커밋만으로 된 PR 은 없으므로 PR 제목에는 이슈 키가 있어야 한다.
     description:
       mode: "error"
+    # 끈다 — 주석은 "왜" 가 필요한 곳에만 단다는 이 저장소 기준과 맞지 않는다. 함수 수로 비율을 재면
+    # getter · 시험 메서드까지 세어져, 매 PR 에 경고만 붙고 고칠 것이 없다(#22: 56.79% / 기준 80%).
+    docstrings:
+      mode: "off"
 
   tools:
     gitleaks: { enabled: true }

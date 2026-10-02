@@ -1,10 +1,12 @@
 package com.grandis.nova.mockapi.control.api;
 
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
+import com.grandis.nova.mockapi.global.validation.Identifiers;
 import jakarta.validation.Valid;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,9 +23,13 @@ import org.springframework.web.bind.annotation.RestController;
  * 시연 중에 무엇이 실패한 것인지 분간할 수 없다.
  *
  * <p>워커가 부르는 API 가 아니므로 잘못된 입력은 전부 400 이다.
+ *
+ * <p>{@code produces} · {@code consumes} 를 매핑에 둔다. 헤더가 틀린 요청을 결함을 걸기 전에 걸러야 한다 — 없으면
+ * 결함을 걸어 둔 뒤에야 응답을 못 써 4xx 가 나가고, 보낸 사람은 안 걸린 줄 아는데 다음 등록에서 터진다.
+ * 설정 · 초기화도 같은 이유로 매핑에 둔다({@code RegistrationController} 참고).
  */
 @RestController
-@RequestMapping("/external/faults")
+@RequestMapping(path = "/external/faults", produces = MediaType.APPLICATION_JSON_VALUE)
 public class FaultController {
 
     private final InMemoryFaultStore store;
@@ -38,9 +44,11 @@ public class FaultController {
      * <p>등록된 적이 있는 키에도 걸 수 있지만, 재생 경로에는 커밋이 없어 발동하지 않고 그대로
      * 남는다. 남은 결함은 {@code POST /external/reset} 이 지운다.
      */
-    @PostMapping
+    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     public FaultResponse inject(@Valid @RequestBody FaultRequest request) {
+        // 등록이 받지 않는 키에 걸면 그 키로는 등록이 안 돼 결함이 영원히 발동하지 않는다. 같은 규칙으로 거른다.
+        Identifiers.requireFormat("externalKey", request.externalKey());
         store.inject(request.externalKey(), request.faultType());
         // 시각은 밀리초까지다. 등록 원장이 저장·응답을 맞추려고 자르는 것과 같은 자리수로 맞춘다.
         return new FaultResponse(request.externalKey(), request.faultType(),
