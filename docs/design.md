@@ -105,6 +105,10 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 
 `drop()` 이 정상 반환하지 않는다는 것도 계약이다. 등록 처리가 여기에 기대어 뒤이은 201 응답을 쓰지 않는다.
 
+`X-Mock-Injected-Latency-Ms` 응답 헤더는 **`FailureInjector.apply` 가 대기 직전에 직접 붙인다**(`RequestContextHolder`).
+등록 쪽 코드에는 이 헤더가 보이지 않지만, 위 시그니처를 바꾸지 않으려고 고른 방식이다. 1단계라 원장을 보기 전이므로
+그 뒤 결과가 무엇이든(201 · 재생 · 409 · 422 · 500) 같이 나간다(api.md 등록 Response).
+
 ## 스키마
 
 `docs/schema.sql` 이 정본이다. Hibernate 가 테이블을 만들면 CHECK 제약이 빠지므로 `ddl-auto` 는
