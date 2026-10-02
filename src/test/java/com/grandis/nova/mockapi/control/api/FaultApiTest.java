@@ -77,7 +77,7 @@ class FaultApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errorMessage")
-                        .value("faultType 은(는) RESPONSE_LOST_AFTER_COMMIT 중 하나여야 합니다. 받은 값: BOOM"));
+                        .value("faultType 은(는) RESPONSE_LOST_AFTER_COMMIT, SLOW_SUCCESS 중 하나여야 합니다. 받은 값: BOOM"));
 
         assertThat(store.consumeResponseLost(KEY)).isFalse();
     }
