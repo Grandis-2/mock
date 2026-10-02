@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.grandis.nova.mockapi.global.chaos.ConfigProvider;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
+import com.grandis.nova.mockapi.global.chaos.LatencyTail;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import java.util.concurrent.CountDownLatch;
@@ -155,6 +156,104 @@ class MockConfigApiTest {
                                 {"registerLatencyMs":900,"failureRate":0.5}"""))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage", containsString("Accept")));
+
+        assertThat(store.applied()).isEqualTo(before);
+    }
+
+    // ---------------------------------------------------------------- 지연 꼬리 (NV-260)
+
+    @Test
+    @DisplayName("꼬리 세 칸을 주면 적용되고, 응답에 꼬리와 보정된 몸통 평균이 나간다")
+    void appliesLatencyTail() throws Exception {
+        mvc.perform(put(PATH).contentType(MediaType.APPLICATION_JSON).content("""
+                        {"registerLatencyMs":500,"failureRate":0.05,
+                         "latencyTailRate":0.02,"latencyTailMinMs":2000,"latencyTailMaxMs":4000}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.latencyTailRate").value(0.02))
+                .andExpect(jsonPath("$.latencyTailMinMs").value(2000))
+                .andExpect(jsonPath("$.latencyTailMaxMs").value(4000))
+                // (500 − 0.02 × 3000) ÷ 0.98 ≈ 448.98
+                .andExpect(jsonPath("$.bodyLatencyMs").value(449));
+
+        assertThat(store.snapshot().latencyTail()).isEqualTo(new LatencyTail(0.02, 2000, 4000));
+        mvc.perform(get(PATH)).andExpect(jsonPath("$.bodyLatencyMs").value(449));
+    }
+
+    /** PUT 은 통째 교체다. 생략이 "앞 값 유지" 면 시나리오를 바꿀 때 앞 시나리오의 꼬리가 남는다. */
+    @Test
+    @DisplayName("꼬리 칸을 다 빼면 꼬리 없음이다 — 앞 설정의 꼬리를 남기지 않는다")
+    void omittedTailMeansNone() throws Exception {
+        store.update(500, new LatencyTail(0.02, 2000, 4000), 0.05, FailureMode.HTTP_5XX);
+
+        mvc.perform(put(PATH).contentType(MediaType.APPLICATION_JSON).content("""
+                        {"registerLatencyMs":500,"failureRate":0.05}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.latencyTailRate").value(0.0))
+                .andExpect(jsonPath("$.latencyTailMinMs").value(0))
+                .andExpect(jsonPath("$.latencyTailMaxMs").value(0))
+                .andExpect(jsonPath("$.bodyLatencyMs").value(500));
+
+        assertThat(store.snapshot().latencyTail()).isEqualTo(LatencyTail.NONE);
+    }
+
+    /** 확인용 등록 · 시험 설정이 지연 0 을 쓴다. "꼬리가 평균을 넘는다" 로 걸리면 안 된다. */
+    @Test
+    @DisplayName("지연 0 · 꼬리 0 은 받는다 — 비율 0 이면 몸통 평균 검사를 건너뛴다")
+    void zeroLatencyZeroTailAccepted() throws Exception {
+        mvc.perform(put(PATH).contentType(MediaType.APPLICATION_JSON).content("""
+                        {"registerLatencyMs":0,"failureRate":0.0,
+                         "latencyTailRate":0.0,"latencyTailMinMs":0,"latencyTailMaxMs":0}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bodyLatencyMs").value(0));
+
+        assertThat(store.snapshot().latencyTail()).isEqualTo(LatencyTail.NONE);
+    }
+
+    /**
+     * 비율만 주고 구간을 빠뜨린 실수가 조용히 "꼬리 없음" 이 되면, 보낸 사람은 꼬리를 걸었다고 믿고 결과를 읽는다.
+     * 범위 · 관계가 어긋난 꼬리도 마찬가지로 설정을 건드리지 않아야 한다.
+     */
+    @Test
+    @DisplayName("꼬리 칸 일부만 · 비율 1 이상 · 최소 > 최대 · 꼬리가 평균을 넘으면 400 이고 설정을 바꾸지 않는다")
+    void rejectsInvalidTail() throws Exception {
+        store.update(700, 0.3, FailureMode.HTTP_5XX);
+        var before = store.applied();
+
+        String[][] cases = {
+                {"""
+                {"registerLatencyMs":500,"failureRate":0.05,"latencyTailRate":0.02}""",
+                        "함께 보내거나 함께 빼야 합니다. 빠진 칸: latencyTailMinMs · latencyTailMaxMs"},
+                {"""
+                {"registerLatencyMs":500,"failureRate":0.05,"latencyTailMinMs":2000,"latencyTailMaxMs":4000}""",
+                        "빠진 칸: latencyTailRate"},
+                {"""
+                {"registerLatencyMs":500,"failureRate":0.05,
+                 "latencyTailRate":1.0,"latencyTailMinMs":2000,"latencyTailMaxMs":4000}""",
+                        "latencyTailRate 은(는) 1 미만이어야 합니다."},
+                {"""
+                {"registerLatencyMs":500,"failureRate":0.05,
+                 "latencyTailRate":-0.1,"latencyTailMinMs":2000,"latencyTailMaxMs":4000}""",
+                        "latencyTailRate 은(는) 0 이상이어야 합니다."},
+                {"""
+                {"registerLatencyMs":500,"failureRate":0.05,
+                 "latencyTailRate":0.02,"latencyTailMinMs":4000,"latencyTailMaxMs":2000}""",
+                        "latencyTailMinMs 은(는) latencyTailMaxMs 이하여야 합니다."},
+                {"""
+                {"registerLatencyMs":500,"failureRate":0.05,
+                 "latencyTailRate":0.02,"latencyTailMinMs":2000,"latencyTailMaxMs":60001}""",
+                        "latencyTailMaxMs 은(는) 60000 이하여야 합니다."},
+                // 0.2 × 3000 = 600 ≥ 500 — 나머지 요청을 음수로 기다리게 해야 평균이 맞는다
+                {"""
+                {"registerLatencyMs":500,"failureRate":0.05,
+                 "latencyTailRate":0.2,"latencyTailMinMs":3000,"latencyTailMaxMs":3000}""",
+                        "꼬리만으로 평균 지연을 넘습니다."}};
+
+        for (String[] c : cases) {
+            mvc.perform(put(PATH).contentType(MediaType.APPLICATION_JSON).content(c[0]))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.errorMessage", containsString(c[1])));
+        }
 
         assertThat(store.applied()).isEqualTo(before);
     }
