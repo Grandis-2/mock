@@ -114,7 +114,7 @@ public class GlobalExceptionHandler {
 
     /**
      * Content-Type 누락 · 오타 · 와일드카드({@code application/*}). 본문을 읽을 수 없으니 재시도해도 같다.
-     * 등록 · 취소는 매핑의 {@code consumes} 에서 걸려 핸들러에 들어가기 전에 여기로 온다.
+     * 등록 · 취소 · 제어 API 는 매핑의 {@code consumes} 에서 걸려 핸들러에 들어가기 전에 여기로 온다.
      */
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     public ResponseEntity<ErrorResponse> handleMediaType(HttpMediaTypeNotSupportedException e) {

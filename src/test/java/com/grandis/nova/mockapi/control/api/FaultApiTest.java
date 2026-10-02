@@ -34,6 +34,7 @@ class FaultApiTest {
 
     private static final String PATH = "/external/faults";
     private static final String KEY = "test-lost-1";
+    private static final String KEY_FORMAT_MESSAGE = "externalKey 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다.";
 
     @Autowired
     private MockMvc mvc;
@@ -102,11 +103,47 @@ class FaultApiTest {
         inject("""
                 {"externalKey":"%s","faultType":"RESPONSE_LOST_AFTER_COMMIT"}""".formatted("k".repeat(101)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage").value("externalKey 은(는) 100자 이하여야 합니다."));
+                .andExpect(jsonPath("$.errorMessage").value(KEY_FORMAT_MESSAGE));
 
         inject("""
                 {"externalKey":"%s","faultType":"RESPONSE_LOST_AFTER_COMMIT"}""".formatted("k".repeat(100)))
                 .andExpect(status().isCreated());
+    }
+
+    /**
+     * 등록이 받지 않는 키에 결함을 걸면 그 키로는 등록이 안 돼 결함이 영원히 발동하지 않는다. 시연에서는
+     * "걸었는데 안 터진다" 로 보여 원인을 찾기 어렵다. 등록과 같은 규칙({@code Identifiers})으로 거른다.
+     */
+    @Test
+    @DisplayName("등록이 받지 않는 형식의 키는 400 이고 결함을 걸지 않는다")
+    void keyFormat() throws Exception {
+        for (String key : new String[]{"has space", "a/b", "..", "키", "a,b"}) {
+            inject("""
+                    {"externalKey":"%s","faultType":"RESPONSE_LOST_AFTER_COMMIT"}""".formatted(key))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorMessage").value(KEY_FORMAT_MESSAGE));
+            assertThat(store.consumeResponseLost(key)).as(key).isFalse();
+        }
+
+        inject("""
+                {"externalKey":"550e8400-e29b-41d4-a716-446655440000","faultType":"RESPONSE_LOST_AFTER_COMMIT"}""")
+                .andExpect(status().isCreated());
+    }
+
+    /**
+     * 매핑에서 거르지 않으면 결함을 걸어 둔 뒤에야 응답을 못 써 4xx 가 나간다. 보낸 사람은 안 걸린 줄 아는데
+     * 다음 등록에서 터진다.
+     */
+    @Test
+    @DisplayName("Accept 에 JSON 이 없으면 400 이고 결함을 걸지 않는다")
+    void acceptWithoutJsonInjectsNothing() throws Exception {
+        mvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).accept(MediaType.TEXT_PLAIN)
+                        .content("""
+                                {"externalKey":"test-lost-1","faultType":"RESPONSE_LOST_AFTER_COMMIT"}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorMessage", containsString("Accept")));
+
+        assertThat(store.consumeResponseLost(KEY)).isFalse();
     }
 
     /**

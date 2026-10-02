@@ -154,6 +154,20 @@ class ResetApiTest {
         assertThat(repository.count()).isEqualTo(1);
     }
 
+    /** 매핑에서 거르지 않으면 다 지운 뒤에야 응답을 못 써 4xx 가 나간다. 보낸 사람은 안 지워진 줄 안다. */
+    @Test
+    @DisplayName("Accept 에 JSON 이 없으면 400 이고 기록을 건드리지 않는다")
+    void acceptWithoutJsonDeletesNothing() throws Exception {
+        saveActive(KEY);
+
+        mvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).accept(MediaType.TEXT_PLAIN)
+                        .content(CONFIRMED))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
+
+        assertThat(repository.count()).isEqualTo(1);
+    }
+
     /**
      * 명세: "지연·실패 설정과 설정 버전은 그대로 둔다."
      *

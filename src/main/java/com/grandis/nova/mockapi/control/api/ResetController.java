@@ -3,6 +3,7 @@ package com.grandis.nova.mockapi.control.api;
 import com.grandis.nova.mockapi.control.application.ResetBarrier;
 import com.grandis.nova.mockapi.control.application.ResetService;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,7 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>워커가 부르는 API 가 아니므로 잘못된 입력은 전부 400 이다.
  */
 @RestController
-@RequestMapping("/external/reset")
+@RequestMapping(path = "/external/reset", produces = MediaType.APPLICATION_JSON_VALUE)
 public class ResetController {
 
     private final ResetService service;
@@ -38,7 +39,7 @@ public class ResetController {
      * <p>진행 중인 등록 · 취소가 있으면 409 로 거절한다. 장벽은 여기서 감싼다 — 서비스의 트랜잭션이
      * 커밋될 때까지 잠금을 쥐고 있어야 그사이 새 등록이 끼어들지 못한다.
      */
-    @PostMapping
+    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResetResponse reset(@Valid @RequestBody ResetRequest request) {
         return new ResetResponse(barrier.exclusively(service::reset));
     }
