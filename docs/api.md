@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.9 / 2026-10-02 (설정에 지연 꼬리 — 꼬리 비율 · 구간, 보정된 몸통 평균) |
+| 버전 / 작성일 | 5.10 / 2026-10-02 (결함에 느린 성공 — `SLOW_SUCCESS` · `delayMs`) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
 | 기준 | ERD v5 (`스마트폰 사전예약 + 최소 일반 판매 ERD · v5 · 2026-09-17`, dbdiagram) |
@@ -810,6 +810,7 @@ Accept: application/json
 ### 요구사항
 
 - 키를 지정해 등록 **커밋 후 응답 유실**을 주입한다.
+- 키를 지정해 **느린 성공**(커밋 전에 정한 시간 기다린 뒤 정상 처리)을 주입한다. 워커 타임아웃보다 길게 걸면 **워커가 포기한 뒤 늦게 커밋되는 등록**을 정확히 한 건 만든다.
 - 결함은 키 단위로 격리되며 한 번 발동하면 자동 해제된다.
 - 지연·실패율로는 이 상황을 만들 수 없다. 주입한 실패는 모두 커밋 전이라 등록이 저장되지 않는다.
 
@@ -830,12 +831,21 @@ Accept: application/json
 | 필드 | 타입 | 필수 | 제약 |
 | --- | --- | --- | --- |
 | `externalKey` | string | 필수 | 결함을 걸 키. 등록 키와 같은 형식(영문 · 숫자 · `. _ -` 1~100자) — 등록이 받지 않는 키에 걸면 발동할 수 없다 |
-| `faultType` | string | 필수 | `RESPONSE_LOST_AFTER_COMMIT`. 결함을 더 만들 때를 위해 필드로 둔다 |
+| `faultType` | string | 필수 | `RESPONSE_LOST_AFTER_COMMIT` · `SLOW_SUCCESS` |
+| `delayMs` | integer | `SLOW_SUCCESS` 에 필수 | 커밋 전에 기다릴 시간. `min=1` · `max=60000`. **`RESPONSE_LOST_AFTER_COMMIT` 에 주면 400** — 조용히 버리면 보낸 사람이 "기다렸다 응답을 잃는다" 고 믿는다 |
 
 ```json
 {
   "externalKey": "9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
   "faultType": "RESPONSE_LOST_AFTER_COMMIT"
+}
+```
+
+```json
+{
+  "externalKey": "9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
+  "faultType": "SLOW_SUCCESS",
+  "delayMs": 6000
 }
 ```
 
@@ -848,6 +858,15 @@ Accept: application/json
 4. 한 번 발동하면 자동 해제한다. 발동하지 않은 결함은 재기동하면 사라진다.
 5. 다른 키에 영향을 주지 않는다.
 
+**느린 성공(`SLOW_SUCCESS`)** — 위 3 대신 이렇게 발동한다.
+
+1. 그 키로 등록이 들어오면 지연 주입 · 실패 판정 **뒤, 키 행 잠금 전**(등록 처리 2-1단계)에 `delayMs` 만큼 기다린 뒤 정상 처리한다.
+2. 결함은 **기다리기 전에 꺼낸다** — 꺼내는 순간 한 번만 발동한다. 기다리는 동안 들어온 같은 키 재시도는 결함이 이미 없어 바로 진행한다(먼저 커밋할 수 있다 — 그러면 재시도 응답은 201 · `X-Idempotent-Replay: false` 이고 원래 요청이 재생 쪽이 된다).
+3. 기다리는 동안은 잠금 전이라 **키 조회가 404** 이고, 그사이 남긴 취소 표식은 원래 요청을 409 `KEY_CANCELED` 로 막는다.
+4. 기다린 시간은 `X-Mock-Injected-Latency-Ms` 에 더해 나간다. 기다리는 요청은 초기화 장벽 안에 있어 그동안 `reset` 은 409 `RESET_BUSY` 다.
+
+지연 꼬리(`tail-over-timeout`)는 같은 상황을 확률로 여러 건 만든다. 이 결함은 시연에서 지정한 키 한 건으로 만든다.
+
 ### Response
 
 **201 Created**
@@ -856,15 +875,18 @@ Accept: application/json
 {
   "externalKey": "9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
   "faultType": "RESPONSE_LOST_AFTER_COMMIT",
+  "delayMs": null,
   "createdAt": "2026-09-16T10:30:00.000Z"
 }
 ```
+
+`delayMs` 는 `SLOW_SUCCESS` 일 때 건 대기 시간이고, 응답 유실이면 `null` 이다.
 
 **주요 오류**
 
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
-| 400 | `INVALID_REQUEST` | 잘못된 `faultType` · 형식이 틀린 `externalKey` · 헤더 오류 등. 결함을 걸지 않는다 |
+| 400 | `INVALID_REQUEST` | 잘못된 `faultType` · 형식이 틀린 `externalKey` · `SLOW_SUCCESS` 에 `delayMs` 없음 · 범위 밖 · 응답 유실에 `delayMs` · 헤더 오류 등. 결함을 걸지 않는다 |
 
 ---
 

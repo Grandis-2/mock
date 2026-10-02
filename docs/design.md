@@ -59,6 +59,7 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 
 ```
 [트랜잭션 밖]  1. 지연 대기   2. 실패율 판정(커밋 전이라 저장 없음)     ← FailureInjector
+               2-1. 느린 성공 결함이 걸린 키면 정한 시간 기다리기(잠금 전)  ← FaultHook
 [트랜잭션 안]  3. 키 행 잠금   4. 취소 표식이면 KEY_CANCELED            ← RegistrationWriter
                5. 이미 등록됐으면 재생 / 내용 다르면 422
                6. 커밋 후 201
@@ -95,13 +96,14 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 
 ## 등록 파트 ↔ 제어 파트 계약
 
-등록 처리(`registration/`)가 제어 파트(`global/chaos/`)에서 가져다 쓰는 것은 이 넷뿐이다.
+등록 처리(`registration/`)가 제어 파트(`global/chaos/`)에서 가져다 쓰는 것은 이 다섯뿐이다.
 **시그니처나 아래 약속을 바꾸려면 양쪽이 합의한다.**
 
 | 쓰는 것 | 언제 | 약속 |
 | --- | --- | --- |
 | `ConfigProvider.snapshot()` | 1단계 전 | 이 시도가 끝까지 쓸 설정을 얼려 준다. 버전은 `X-Mock-Config-Version` 으로 나간다 |
 | `FailureInjector.apply(snapshot)` | 1~2단계 | **트랜잭션 밖**에서 부른다. 실패는 `MockException`, `TIMEOUT` 은 응답 없이 끝난다 |
+| `FaultHook.holdBeforeCommit(key)` | 2단계 뒤 · 3단계 전 | **트랜잭션 밖 · 키 행 잠금 전**에 부른다(지연 주입 뒤, 중복 키 재시도 앞). 느린 성공 결함이 걸린 키면 **결함을 먼저 꺼내고** 정한 시간 기다린 뒤 돌아온다 — 그사이 같은 키 재시도는 기다리지 않는다. 기다린 시간은 `X-Mock-Injected-Latency-Ms` 에 더한다. 중단되면 500(저장 없음) |
 | `FaultHook.consumeResponseLost(key)` | 7단계 | **새로 커밋한 직후에만** 부른다. true 면 결함을 소비한 것이다 |
 | `ConnectionDropper.drop(reason)` | 7단계 | 응답 없이 연결을 붙잡다 끝낸다. **정상 반환하지 않는다** — 항상 `ResponseLostException` |
 
