@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.control.api;
 
+import com.grandis.nova.mockapi.global.chaos.LatencyTail;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import jakarta.validation.Valid;
@@ -45,8 +46,11 @@ public class MockConfigController {
      */
     @PutMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ConfigResponse update(@Valid @RequestBody ConfigUpdateRequest request) {
+        // 꼬리 검사가 400 이면 여기서 끝나 설정을 건드리지 않는다
+        LatencyTail latencyTail = request.latencyTailOrNone();
         return ConfigResponse.from(store.update(
                 request.registerLatencyMs(),
+                latencyTail,
                 request.failureRate(),
                 request.failureModeOrDefault()), properties);
     }

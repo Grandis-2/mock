@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.8 / 2026-10-02 (제어 API 도 헤더 검사를 처리 전에 · 결함 키를 등록 키와 같은 형식으로) |
+| 버전 / 작성일 | 5.9 / 2026-10-02 (설정에 지연 꼬리 — 꼬리 비율 · 구간, 보정된 몸통 평균) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
 | 기준 | ERD v5 (`스마트폰 사전예약 + 최소 일반 판매 ERD · v5 · 2026-09-17`, dbdiagram) |
@@ -645,6 +645,10 @@ Accept: application/json
 {
   "registerLatencyMs": 500,
   "latencyJitter": 0.4,
+  "latencyTailRate": 0.0,
+  "latencyTailMinMs": 0,
+  "latencyTailMaxMs": 0,
+  "bodyLatencyMs": 500,
   "failureRate": 0.05,
   "failureMode": "HTTP_5XX",
   "configVersion": 4,
@@ -656,8 +660,10 @@ Accept: application/json
 
 | 필드 | 설명 |
 | --- | --- |
-| `registerLatencyMs` | 지연의 **평균** |
+| `registerLatencyMs` | 지연의 **평균**. 꼬리를 걸어도 전체 평균은 이 값이다 |
 | `latencyJitter` | 지연을 흔드는 폭. 실제 대기는 `평균 × (1 ∓ 이 값)` 균등분포. **조회만 되고 변경은 안 된다** — 설정 파일로 정한다 |
+| `latencyTailRate` · `latencyTailMinMs` · `latencyTailMaxMs` | 지연의 느린 꼬리. 요청마다 이 비율로 [최소, 최대] 균등에서 뽑는다. 비율 0 이면 꼬리 없음(구간도 0) |
+| `bodyLatencyMs` | 꼬리에 걸리지 않은 요청의 평균. 전체 평균이 `registerLatencyMs` 가 되도록 꼬리만큼 낮춘 값(반올림)이고, 지터는 여기에만 걸린다. **조회만 된다** |
 | `configVersion` · `appliedAt` | 설정을 바꿀 때마다 오르는 버전과 그 시각 |
 | `timeoutHoldMs` · `workerReadTimeoutMs` | 유지 시간과 워커 읽기 타임아웃(설정 절). **조회만 되고 변경은 안 된다** — 설정 파일로 정한다. 부하 보고서가 어떤 조건의 Mock 이었는지 남기는 데 쓴다 |
 
@@ -701,10 +707,36 @@ Accept: application/json
 | `registerLatencyMs` | integer | 필수 | 지연의 **평균**. `default=500` · `min=0` · `max=60000` |
 | `failureRate` | number | 필수 | `default=0.05` · `min=0` · `max=1` |
 | `failureMode` | string | 선택 | `HTTP_5XX`(기본) / `TIMEOUT` |
+| `latencyTailRate` | number | 선택(꼬리 묶음) | 꼬리에 걸릴 확률. `min=0` · **1 미만** |
+| `latencyTailMinMs` | integer | 선택(꼬리 묶음) | 꼬리 구간 하한. `min=0` · `max=60000` · 최대 이하 |
+| `latencyTailMaxMs` | integer | 선택(꼬리 묶음) | 꼬리 구간 상한(포함). `min=0` · `max=60000` |
 
 `latencyJitter` 는 받지 않는다. 보내면 모르는 필드라 400 이다. 실행 중에 바꿀 수 있으면 등록 파트와의
-계약인 `ConfigSnapshot` 이 늘어나고, 부하 판정 도중 분포가 바뀌면 주입한 몫을 빼낼 수 없다.
+계약인 `ConfigSnapshot` 이 늘어난다. 분포의 모양을 실행 중에 바꾸려면 아래 꼬리를 쓴다.
 `timeoutHoldMs` 와 같은 취급이다.
+
+**지연 꼬리(선택)** — 대부분 빠르고 드물게 수 초 걸리는 외부 시스템, 특히 **워커 타임아웃 뒤에 늦게 커밋되는 등록**을
+만든다. 지연 대기는 잠금 밖이라 기다리는 동안 키 조회는 404 이고, 워커가 포기한 뒤에 커밋된다. 응답 유실 결함은
+커밋한 뒤 끊어 키 조회가 처음부터 ACTIVE 라 이 경우가 아니다.
+
+- 요청마다 `latencyTailRate` 확률로 [`latencyTailMinMs`, `latencyTailMaxMs`] 균등에서 뽑고, 나머지는 몸통에서 뽑는다.
+- **전체 평균은 `registerLatencyMs` 그대로다.** 몸통 평균을 `(평균 − 비율 × 꼬리 평균) ÷ (1 − 비율)` 로 낮춘다.
+  예: 500 · 2% 가 2~4초면 몸통 평균 449ms(`bodyLatencyMs`). 지터는 몸통에만 걸린다.
+- 세 칸은 **함께 보내거나 함께 뺀다.** 다 빼면 꼬리 없음이고(통째 교체라 앞 설정의 꼬리를 남기지 않는다),
+  일부만 보내면 400 이다 — 비율만 보내고 구간을 빠뜨린 실수가 조용히 "꼬리 없음" 이 되지 않게.
+- 비율 0 이면 꼬리 없음이고 아래 평균 검사를 건너뛴다(지연 0 · 꼬리 0 도 받는다).
+  비율이 0 보다 크면 `비율 × 꼬리 평균 < registerLatencyMs` 여야 한다 — 아니면 꼬리만으로 평균을 넘겨 맞출 수 없다.
+- 실제로 뽑힌 대기는 등록 응답의 `X-Mock-Injected-Latency-Ms` 로 나간다. 기동할 때는 늘 꼬리 없음이다.
+
+```json
+{
+  "registerLatencyMs": 500,
+  "failureRate": 0.05,
+  "latencyTailRate": 0.02,
+  "latencyTailMinMs": 2000,
+  "latencyTailMaxMs": 4000
+}
+```
 
 ```json
 {
@@ -729,7 +761,7 @@ Accept: application/json
 
 ### 시스템 처리
 
-1. 값의 범위를 검사하고 벗어나면 400.
+1. 값의 범위와 꼬리 묶음 규칙(위 "지연 꼬리")을 검사하고 어긋나면 400. 설정을 건드리지 않는다.
 2. 설정을 바꾸고 `configVersion` 을 1 증가시킨다.
 3. `appliedAt` 을 기록한다.
 4. 진행 중인 등록 시도는 시작 시점 버전을 유지하고, 변경은 이후 시도부터 적용한다.
@@ -743,7 +775,7 @@ Accept: application/json
 
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
-| 400 | `INVALID_REQUEST` | 범위 밖 값 |
+| 400 | `INVALID_REQUEST` | 범위 밖 값 · 꼬리 칸 일부만 · 꼬리 최소 > 최대 · 꼬리만으로 평균을 넘음 |
 
 ### 확인 시나리오
 
@@ -751,6 +783,10 @@ Accept: application/json
 | --- | --- |
 | 등록 진행 중 설정 변경 | 진행 중 시도는 원래 버전 유지 |
 | 음수 지연 · 0~1 밖 실패율 | 400 |
+| 꼬리 칸 세 개를 다 줌 | 적용, `bodyLatencyMs` 가 보정값 (2% · 2~4초면 449) |
+| 꼬리 칸을 다 뺌 | 꼬리 없음 — 앞 설정의 꼬리를 남기지 않는다 |
+| 꼬리 칸 일부만 · 비율 1 이상 · 최소 > 최대 · 비율 × 꼬리 평균 ≥ 평균 | 400, 설정 그대로 |
+| 지연 0 · 꼬리 0 | 적용 (비율 0 이면 몸통 평균 검사를 건너뛴다) |
 
 **재기동 시험과 겹칠 때 주의** — 설정이 메모리라 재기동하면 기본값으로 돌아간다. 시연 순서에 "재기동 후 설정 재입력" 을 넣어두는 게 좋다.
 

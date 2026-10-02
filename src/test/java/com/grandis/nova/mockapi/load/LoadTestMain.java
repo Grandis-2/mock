@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.load;
 
+import com.grandis.nova.mockapi.global.chaos.LatencyTail;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -93,10 +94,11 @@ public final class LoadTestMain {
         double failureRate = readDecimal(configBody, "failureRate", 0.0);
         int configVersion = readConfigVersion(configBody);
         // 지연은 평균값이라 요청마다 흔들린다. 흔드는 폭을 알아야 관측값에서 주입한 몫을 뺄 수 있다.
-        // 평균화 이전 Mock 은 이 필드가 없으므로 0(고정)으로 본다.
+        // 평균화 이전 Mock 은 이 필드가 없으므로 0(고정)으로 본다. 꼬리를 모르는 Mock 이면 꼬리 없음이다.
         InjectedLatency injected = new InjectedLatency(
                 readNumber(configBody, "registerLatencyMs"),
-                readDecimal(configBody, "latencyJitter", 0.0));
+                readDecimal(configBody, "latencyJitter", 0.0),
+                readTail(configBody));
         // TIMEOUT 모드에서 주사위에 걸린 요청은 Mock 이 응답 없이 붙잡는다. 그만큼은 클라이언트가
         // 포기할 때까지 떠 있으므로 동시 요청 상한을 계산할 때 따로 센다.
         double heldFraction = "TIMEOUT".equals(failureMode) ? failureRate : 0.0;
@@ -107,10 +109,8 @@ public final class LoadTestMain {
         System.out.println("주입한 지연: " + injected.describe());
         if (!plan.leavesRoomFor(injected)) {
             // 쏘기 전에 알린다. 5,000건을 다 쏘고 나서야 알면 실행 하나를 버린다.
-            System.out.printf("⚠ 주입 최대 %dms + 허용 오버헤드 %dms 가 응답 타임아웃 %dms 를 넘는다. "
-                            + "꼬리의 요청은 Mock 이 빨라도 결과 불명이 된다.%n",
-                    injected.percentileMs(100), plan.maxP99Overhead().toMillis(),
-                    plan.responseTimeout().toMillis());
+            System.out.println("⚠ " + plan.roomDetail(injected) + " — 응답 타임아웃을 넘는다. "
+                    + "꼬리의 요청은 Mock 이 빨라도 결과 불명이 된다.");
         }
         System.out.println("설정: " + configBody);
 
@@ -200,9 +200,30 @@ public final class LoadTestMain {
                     {"registerLatencyMs":1500,"failureRate":0.0,"failureMode":"HTTP_5XX"}""";
             case "timeout" -> """
                     {"registerLatencyMs":0,"failureRate":1.0,"failureMode":"TIMEOUT"}""";
+            // 느린 꼬리(NV-260). baseline 에 2% · 2~4초를 얹는다. 4000 + 허용 400 < 5000 이라 결과 불명은 0 이어야 한다
+            case "tail" -> """
+                    {"registerLatencyMs":500,"failureRate":0.05,"failureMode":"HTTP_5XX",
+                     "latencyTailRate":0.02,"latencyTailMinMs":2000,"latencyTailMaxMs":4000}""";
+            // 워커 타임아웃 뒤 늦은 커밋(NV-260). 꼬리 하한 5500 > 5000 이라 꼬리 요청은 전부 결과 불명이고 원장에는
+            // 남아야 한다. 실패율 0 — 꼬리 요청이 주사위에 걸리면 "결과 불명 키는 전부 ACTIVE" 를 단정할 수 없다.
+            // classify 패스만 판정에 쓴다(latency 패스 10초면 꼬리도 제시간이다)
+            case "tail-over-timeout" -> """
+                    {"registerLatencyMs":500,"failureRate":0.0,"failureMode":"HTTP_5XX",
+                     "latencyTailRate":0.005,"latencyTailMinMs":5500,"latencyTailMaxMs":6500}""";
             default -> throw new IllegalArgumentException(
-                    "시나리오는 baseline · latency · timeout 중 하나여야 합니다. 받은 값: " + scenario);
+                    "시나리오는 baseline · latency · timeout · tail · tail-over-timeout 중 하나여야 합니다. 받은 값: "
+                            + scenario);
         };
+    }
+
+    /** 설정 응답의 꼬리 세 칸. 꼬리를 모르는 Mock 이거나 비율이 0 이면 꼬리 없음이다. */
+    private static LatencyTail readTail(String configBody) {
+        double rate = readDecimal(configBody, "latencyTailRate", 0.0);
+        if (rate <= 0) {
+            return LatencyTail.NONE;
+        }
+        return new LatencyTail(rate, readNumber(configBody, "latencyTailMinMs"),
+                readNumber(configBody, "latencyTailMaxMs"));
     }
 
     private static void put(String url, String body) throws Exception {
@@ -239,7 +260,8 @@ public final class LoadTestMain {
 
     /** 소수 하나를 긁는다. 필드가 없으면 기본값이다. */
     private static double readDecimal(String configBody, String field, double absent) {
-        var matcher = java.util.regex.Pattern.compile("\"" + field + "\"\\s*:\\s*([0-9.]+)")
+        // 아주 작은 값은 지수 표기(5.0E-4)로 온다. 숫자 부분만 긁으면 5.0 으로 읽힌다
+        var matcher = java.util.regex.Pattern.compile("\"" + field + "\"\\s*:\\s*([0-9.]+(?:[Ee][+-]?[0-9]+)?)")
                 .matcher(configBody);
         return matcher.find() ? Double.parseDouble(matcher.group(1)) : absent;
     }

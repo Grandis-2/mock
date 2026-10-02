@@ -36,7 +36,7 @@ public class DefaultFailureInjector implements FailureInjector {
 
     @Override
     public void apply(ConfigSnapshot snapshot) {
-        sleep(snapshot.registerLatencyMs());
+        sleep(drawn(snapshot.registerLatencyMs(), snapshot.latencyTail()));
 
         if (!rolledFailure(snapshot.failureRate())) {
             return;
@@ -60,8 +60,23 @@ public class DefaultFailureInjector implements FailureInjector {
         return ThreadLocalRandom.current().nextDouble() < failureRate;
     }
 
-    private void sleep(int meanLatencyMs) {
-        long waitMs = meanLatencyMs <= 0 ? 0 : jittered(meanLatencyMs);
+    /**
+     * 이 요청이 기다릴 시간을 뽑는다. 꼬리에 걸리면 꼬리 구간에서 균등, 아니면 몸통에서 뽑는다.
+     *
+     * <p>몸통 평균은 설정한 평균이 아니라 꼬리만큼 낮춘 값이다({@link LatencyTail#bodyMeanMs}) — 그래야 전체
+     * 평균이 설정값 그대로다. 지터는 몸통에만 건다. 꼬리는 구간 자체가 퍼져 있다.
+     *
+     * <p>시험이 직접 부를 수 있게 package-private 로 둔다({@link #jittered} 와 같은 이유).
+     */
+    long drawn(int meanMs, LatencyTail tail) {
+        if (!tail.isNone() && ThreadLocalRandom.current().nextDouble() < tail.rate()) {
+            return ThreadLocalRandom.current().nextLong(tail.minMs(), tail.maxMs() + 1L);
+        }
+        double bodyMeanMs = tail.bodyMeanMs(meanMs);
+        return bodyMeanMs <= 0 ? 0 : jittered(bodyMeanMs);
+    }
+
+    private void sleep(long waitMs) {
         announce(waitMs);
         if (waitMs <= 0) {
             return;
@@ -103,10 +118,10 @@ public class DefaultFailureInjector implements FailureInjector {
      * <p>시험이 직접 부를 수 있게 package-private 로 둔다. {@code Thread.sleep} 을 수만 번 재면
      * 스케줄러 오차가 분포보다 커져 무엇을 본 것인지 알 수 없다.
      */
-    long jittered(int meanMs) {
+    long jittered(double meanMs) {
         double jitter = properties.latencyJitter();
         if (jitter <= 0) {
-            return meanMs;
+            return Math.round(meanMs);
         }
         long low = Math.max(0, Math.round(meanMs * (1 - jitter)));
         long high = Math.round(meanMs * (1 + jitter));

@@ -26,7 +26,7 @@ cross-database 조회나 물리 FK 를 두지 않는다. 재기동해도 등록 
 ```
 com.grandis.nova.mockapi/
 ├── global/
-│   ├── chaos/      설정 스냅샷 · 지연·실패 주입 · 결함
+│   ├── chaos/      설정 스냅샷 · 지연(몸통 · 느린 꼬리)·실패 주입 · 결함
 │   ├── config/     MockProperties — 지연 평균·지터·실패율·유지 시간·워커 타임아웃 기본값, 유지 ≥ 워커 + 2초 기동 검증
 │   │               VirtualThreadGuard — 가상 스레드가 꺼져 있으면 기동 실패
 │   │               엄격한 JSON(모르는 필드 · 값이 바뀌는 타입 변환 · 중복 필드 거절, 정수 → 실수만 받음) · 응답 시각 형식

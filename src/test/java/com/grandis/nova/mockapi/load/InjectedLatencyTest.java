@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.load;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.grandis.nova.mockapi.global.chaos.LatencyTail;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -45,5 +46,21 @@ class InjectedLatencyTest {
     void describesNoLatency() {
         assertThat(new InjectedLatency(0, 0.4).describe()).isEqualTo("지연 없음");
         assertThat(new InjectedLatency(500, 0.4).describe()).startsWith("평균 500ms · 300 ~ 700ms");
+    }
+
+    /**
+     * 꼬리가 있으면 몸통은 Mock 과 같은 식으로 낮춘 평균에서 흔든다. 여기서 따로 계산하면 사전 검사가 Mock 과 어긋난다.
+     * 2% · 2~4초면 몸통 평균 ≈ 449 → 269 ~ 629.
+     */
+    @Test
+    @DisplayName("꼬리가 있으면 몸통은 보정된 평균으로, 최대는 꼬리 상한까지")
+    void tailShiftsBodyAndMax() {
+        var latency = new InjectedLatency(500, 0.4, new LatencyTail(0.02, 2000, 4000));
+
+        assertThat(latency.bodyMeanMs()).isEqualTo(new LatencyTail(0.02, 2000, 4000).bodyMeanMs(500));
+        assertThat(latency.percentileMs(0)).isEqualTo(269);
+        assertThat(latency.bodyMaxMs()).isEqualTo(629);
+        assertThat(latency.maxMs()).isEqualTo(4000);
+        assertThat(latency.describe()).contains("몸통 평균 449ms").contains("꼬리 2.0% 2000 ~ 4000ms");
     }
 }
