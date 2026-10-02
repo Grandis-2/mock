@@ -5,6 +5,8 @@ import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
 import java.util.concurrent.ThreadLocalRandom;
 import org.springframework.stereotype.Component;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * 설정된 지연을 평균으로 기다리고, 확률에 걸리면 일시 실패를 만든다.
@@ -20,6 +22,9 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class DefaultFailureInjector implements FailureInjector {
+
+    /** 이 요청에 실제로 뽑힌 지연(ms). 부하 판정이 요청마다 오버헤드를 계산하는 데 쓴다. */
+    public static final String INJECTED_LATENCY_HEADER = "X-Mock-Injected-Latency-Ms";
 
     private final ConnectionDropper dropper;
     private final MockProperties properties;
@@ -56,15 +61,34 @@ public class DefaultFailureInjector implements FailureInjector {
     }
 
     private void sleep(int meanLatencyMs) {
-        if (meanLatencyMs <= 0) {
+        long waitMs = meanLatencyMs <= 0 ? 0 : jittered(meanLatencyMs);
+        announce(waitMs);
+        if (waitMs <= 0) {
             return;
         }
         try {
-            Thread.sleep(jittered(meanLatencyMs));
+            Thread.sleep(waitMs);
         } catch (InterruptedException e) {
             // 인터럽트 상태를 되살려 둔다. 삼키면 종료 신호가 묻힌다.
             Thread.currentThread().interrupt();
             throw new MockException(ErrorCode.UPSTREAM_UNAVAILABLE, "지연 대기 중 중단됐다");
+        }
+    }
+
+    /**
+     * 이 요청에 실제로 뽑힌 대기 시간을 응답 헤더로 알린다. 지연이 0 이어도 {@code 0} 을 붙인다.
+     *
+     * <p>부하 판정이 쓴다. 지연을 흔들면 관측 백분위에서 주입 백분위를 빼는 것은 오버헤드의 백분위가
+     * 아니다 — 분위수는 더하거나 빼지지 않는다(p99 오버헤드가 p95 보다 작게 나온 적이 있다). 요청마다
+     * {@code 관측 − 이 값} 을 구해야 Mock 이 실제로 쓴 시간의 꼬리를 볼 수 있다.
+     *
+     * <p>응답이 확정되기 전이라 여기서 붙여도 201 · 500 모두에 실린다. 서블릿 요청 밖(단위 시험)에서는
+     * 붙일 곳이 없어 건너뛴다.
+     */
+    private static void announce(long waitMs) {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes servlet
+                && servlet.getResponse() != null) {
+            servlet.getResponse().setHeader(INJECTED_LATENCY_HEADER, Long.toString(waitMs));
         }
     }
 

@@ -61,7 +61,11 @@ public final class LoadTestMain {
     private LoadTestMain() {
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] rawArgs) throws Exception {
+        // --warmup 은 어디에 붙여도 된다. 예열 실행은 결과를 버리므로 보고서에 그렇게 적고, 판정과 상관없이 0 으로 끝낸다
+        // (식은 JVM 이라 FAIL 이 나는 게 정상이다 — 스크립트가 거기서 멈추면 안 된다).
+        boolean warmup = java.util.Arrays.asList(rawArgs).contains("--warmup");
+        String[] args = java.util.Arrays.stream(rawArgs).filter(a -> !"--warmup".equals(a)).toArray(String[]::new);
         String baseUrl = args.length > 0 ? args[0] : DEFAULT_BASE_URL;
         String scenario = args.length > 1 ? args[1] : "baseline";
         String pass = args.length > 2 ? args[2] : "classify";
@@ -70,8 +74,23 @@ public final class LoadTestMain {
         String dbUser = args.length > 5 ? args[5] : DEFAULT_DB_USER;
         String dbPassword = args.length > 6 ? args[6] : DEFAULT_DB_PASSWORD;
 
-        applyScenario(baseUrl, scenario);
+        // 인자부터 검사한다. 잘못된 시나리오 · 패스로 Mock 설정만 바꿔 놓고 끝나지 않게 Mock 을 건드리기 전에 거른다.
+        String scenarioConfig = scenarioConfig(scenario);
+        LoadPlan plan = switch (pass) {
+            case "classify" -> LoadPlan.classify(baseUrl, requests);
+            case "latency" -> LoadPlan.latency(baseUrl, requests);
+            default -> throw new IllegalArgumentException(
+                    "패스는 classify 또는 latency 여야 합니다. 받은 값: " + pass);
+        };
+
+        // 시나리오를 걸기 전에 확인용 등록을 하나 넣는다. 끝나고 원장에서 이 키를 찾지 못하면 엉뚱한 DB 를
+        // 읽은 것이다 — JDBC 인자를 빠뜨려 빈 원장을 읽어도 timeout 시나리오의 "결과 불명 키의 행 0" 은
+        // 통과해 버린다(리뷰 H3 ⑤).
+        LoadReport.Canary canary = registerCanary(baseUrl);
+        put(baseUrl + CONFIG, scenarioConfig);
         String configBody = get(baseUrl + CONFIG);
+        String failureMode = configBody.contains("\"failureMode\":\"TIMEOUT\"") ? "TIMEOUT" : "HTTP_5XX";
+        double failureRate = readDecimal(configBody, "failureRate", 0.0);
         int configVersion = readConfigVersion(configBody);
         // 지연은 평균값이라 요청마다 흔들린다. 흔드는 폭을 알아야 관측값에서 주입한 몫을 뺄 수 있다.
         // 평균화 이전 Mock 은 이 필드가 없으므로 0(고정)으로 본다.
@@ -80,16 +99,8 @@ public final class LoadTestMain {
                 readDecimal(configBody, "latencyJitter", 0.0));
         // TIMEOUT 모드에서 주사위에 걸린 요청은 Mock 이 응답 없이 붙잡는다. 그만큼은 클라이언트가
         // 포기할 때까지 떠 있으므로 동시 요청 상한을 계산할 때 따로 센다.
-        double heldFraction = configBody.contains("\"failureMode\":\"TIMEOUT\"")
-                ? readDecimal(configBody, "failureRate", 0.0)
-                : 0.0;
+        double heldFraction = "TIMEOUT".equals(failureMode) ? failureRate : 0.0;
 
-        LoadPlan plan = switch (pass) {
-            case "classify" -> LoadPlan.classify(baseUrl, requests);
-            case "latency" -> LoadPlan.latency(baseUrl, requests);
-            default -> throw new IllegalArgumentException(
-                    "패스는 classify 또는 latency 여야 합니다. 받은 값: " + pass);
-        };
         System.out.printf("시나리오 %s · 패스 %s · %d건 / %s · 타임아웃 %s · configVersion %d%n",
                 scenario, plan.pass(), plan.totalRequests(), plan.rampUp(),
                 plan.responseTimeout(), configVersion);
@@ -107,31 +118,82 @@ public final class LoadTestMain {
         Duration elapsed = runner.run();
 
         // 클라이언트가 멈춰도 서버는 계속 처리한다. 잦아들기를 기다린 뒤 원장을 떠 온다.
+        // 조회에 실패해도 멈추지 않는다 — 보고서를 남겨야 "조회 실패" 가 "불일치 0건" 처럼 사라지지 않는다.
         System.out.println("등록 원장이 잦아들기를 기다린다... (" + jdbcUrl + ")");
-        RegistrationSnapshot db = RegistrationSnapshot.take(jdbcUrl, dbUser, dbPassword);
+        RegistrationSnapshot db = null;
+        String dbError = null;
+        try {
+            db = RegistrationSnapshot.take(jdbcUrl, dbUser, dbPassword);
+        } catch (RuntimeException e) {
+            // 드라이버 메시지는 여러 줄이라 그대로 두면 보고서의 판정 표가 깨진다. 한 줄로 편다.
+            dbError = (e.getClass().getSimpleName() + ": " + e.getMessage()).replaceAll("\\s+", " ").trim();
+            System.out.println("⚠ 원장을 읽지 못했다 — " + dbError);
+        }
 
-        String report = runner.report()
-                .render(plan, configBody, configVersion, injected, heldFraction,
-                        runner.maxInFlight(), runner.maxLaunchLag(), elapsed, db);
+        LoadReport.Facts facts = new LoadReport.Facts(failureMode, failureRate, injected,
+                runner.maxLaunchLag(), db, dbError, canary);
+        Verdict verdict = runner.report().judge(plan, facts);
+        String report = runner.report().render(plan, configBody, configVersion, facts, heldFraction,
+                runner.maxInFlight(), elapsed, verdict, warmup ? "예열 (결과를 버린다)" : "판정");
         System.out.println();
         System.out.println(report);
 
+        // 파일 이름에 패스와 예열 여부를 넣는다. 이름만으로 어느 실행인지 갈라야 판정 15회를 골라낼 수 있다.
         Path out = Path.of("build", "load",
-                "report-" + scenario + "-"
+                (warmup ? "warmup-" : "report-") + scenario + "-" + pass + "-"
                         + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
                         + ".md");
         Files.createDirectories(out.getParent());
         Files.writeString(out, report);
         System.out.println("보고서: " + out.toAbsolutePath());
+        System.out.println((warmup ? "예열 (참고) " : "") + "판정: " + verdict.result().label());
+        // 스크립트로 여러 번 돌릴 때 보고서를 열지 않고 거른다. PASS 0 · FAIL 1 · 판정 불가 2. 예열은 늘 0.
+        // ./gradlew loadTest 를 거치면 Gradle 이 0 이 아닌 값을 모두 1 로 끝내므로, 그때는 위의 "판정: …" 줄로 가른다.
+        System.exit(warmup ? 0 : verdict.result().exitCode());
     }
 
     /**
-     * 시나리오에 맞게 Mock 설정을 바꾼다.
+     * 확인용 등록. 지연 · 실패를 끈 채 하나 넣고 받은 번호를 돌려준다. 실패하면 null 이고, 판정은 "판정 불가" 가 된다.
+     *
+     * <p>설정을 바꾸므로 반드시 시나리오를 걸기 전에 부른다. 이 키 하나만 대조에서 빠진다({@link LoadReport#foreignRows}).
+     */
+    private static LoadReport.Canary registerCanary(String baseUrl) {
+        String key = LoadReport.CANARY_PREFIX + java.util.UUID.randomUUID();
+        try {
+            put(baseUrl + CONFIG, """
+                    {"registerLatencyMs":0,"failureRate":0.0,"failureMode":"HTTP_5XX"}""");
+            HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/external/reservations"))
+                    .header("Content-Type", "application/json")
+                    .header("Idempotency-Key", key)
+                    .timeout(Duration.ofSeconds(5))
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}"""))
+                    .build();
+            HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            var number = java.util.regex.Pattern.compile("\"externalNumber\"\\s*:\\s*\"([^\"]+)\"")
+                    .matcher(response.body());
+            if (response.statusCode() != 201 || !number.find()) {
+                System.out.println("⚠ 확인용 등록 실패 — " + response.statusCode() + " " + response.body());
+                return null;
+            }
+            return new LoadReport.Canary(key, number.group(1));
+        } catch (Exception e) {
+            System.out.println("⚠ 확인용 등록 실패 — " + e);
+            return null;
+        }
+    }
+
+    /**
+     * 시나리오에 맞는 Mock 설정 본문. 없는 시나리오면 예외 — Mock 에 아무것도 보내기 전에 부른다.
      *
      * <p>설정 경로에는 지연·실패를 주입하지 않으므로 실패율 1.0 상태에서도 되돌릴 수 있다.
+     *
+     * <p>설정 PUT 자체가 실패했을 때 원래 값으로 되돌리지는 않는다. 정상 실행도 끝난 뒤 시나리오 설정을 그대로
+     * 두고, 남는 것은 확인용 등록의 지연 0 · 실패 0 이라 다음 실행을 흔들지 않는다. 같은 PUT 이 실패한 상황이면
+     * 되돌리는 PUT 도 실패하기 쉽다.
      */
-    private static void applyScenario(String baseUrl, String scenario) throws Exception {
-        String body = switch (scenario) {
+    private static String scenarioConfig(String scenario) {
+        return switch (scenario) {
             case "baseline" -> """
                     {"registerLatencyMs":500,"failureRate":0.05,"failureMode":"HTTP_5XX"}""";
             case "latency" -> """
@@ -141,8 +203,10 @@ public final class LoadTestMain {
             default -> throw new IllegalArgumentException(
                     "시나리오는 baseline · latency · timeout 중 하나여야 합니다. 받은 값: " + scenario);
         };
+    }
 
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + CONFIG))
+    private static void put(String url, String body) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                 .header("Content-Type", "application/json")
                 .timeout(Duration.ofSeconds(5))
                 .PUT(HttpRequest.BodyPublishers.ofString(body))

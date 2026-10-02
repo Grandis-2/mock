@@ -3,6 +3,7 @@ package com.grandis.nova.mockapi.control.api;
 import com.grandis.nova.mockapi.global.chaos.ConfigSnapshot;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
+import com.grandis.nova.mockapi.global.config.MockProperties;
 import java.time.Instant;
 
 /**
@@ -15,10 +16,13 @@ import java.time.Instant;
  * 응답에 필드를 늘릴 때마다 계약을 건드리게 된다. {@code latencyJitter} 가 그 예다 — 응답에는
  * 있지만 스냅샷에는 없다.
  *
- * @param registerLatencyMs 지연의 <b>평균</b>. 실제 대기는 {@code latencyJitter} 만큼 흔들린다
- * @param latencyJitter     지연을 흔드는 폭. 실제 대기는 {@code 평균 × (1 ∓ 이 값)} 의 균등분포다.
- *                          설정 파일로만 정하고 이 API 로는 바꾸지 않는다. 부하 하네스가 이 값을 읽어
- *                          주입한 지연의 백분위를 계산하고, 요구사항 5.4 대로 적용한 설정을 기록한다
+ * @param registerLatencyMs   지연의 <b>평균</b>. 실제 대기는 {@code latencyJitter} 만큼 흔들린다
+ * @param latencyJitter       지연을 흔드는 폭. 실제 대기는 {@code 평균 × (1 ∓ 이 값)} 의 균등분포다.
+ *                            설정 파일로만 정하고 이 API 로는 바꾸지 않는다. 부하 하네스가 이 값을 읽어
+ *                            주입한 지연의 백분위를 계산하고, 요구사항 5.4 대로 적용한 설정을 기록한다
+ * @param timeoutHoldMs       {@code TIMEOUT} · 결함이 응답 없이 붙잡는 시간. 설정 파일로만 정한다(읽기 전용).
+ *                            부하 보고서가 "어떤 조건의 Mock 이었나" 를 남기는 데 쓴다
+ * @param workerReadTimeoutMs 워커 읽기 타임아웃으로 적어 둔 값. 설정 파일로만 정한다(읽기 전용)
  */
 public record ConfigResponse(
         int registerLatencyMs,
@@ -26,18 +30,22 @@ public record ConfigResponse(
         double failureRate,
         FailureMode failureMode,
         int configVersion,
-        Instant appliedAt
+        Instant appliedAt,
+        long timeoutHoldMs,
+        long workerReadTimeoutMs
 ) {
 
-    /** 중첩된 Applied 를 평평한 응답 모양으로 편다. */
-    public static ConfigResponse from(MockConfigStore.Applied applied, double latencyJitter) {
+    /** 중첩된 Applied 를 평평한 응답 모양으로 펴고, 설정 파일로만 정하는 값을 곁들인다. */
+    public static ConfigResponse from(MockConfigStore.Applied applied, MockProperties properties) {
         ConfigSnapshot snapshot = applied.snapshot();
         return new ConfigResponse(
                 snapshot.registerLatencyMs(),
-                latencyJitter,
+                properties.latencyJitter(),
                 snapshot.failureRate(),
                 snapshot.failureMode(),
                 snapshot.configVersion(),
-                applied.appliedAt());
+                applied.appliedAt(),
+                properties.timeoutHoldMs(),
+                properties.workerReadTimeoutMs());
     }
 }

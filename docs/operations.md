@@ -284,11 +284,12 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 ## 3. 부하 실행
 
 ```bash
-./gradlew bootRun                                                     # 터미널 1
-./gradlew loadTest --args="http://localhost:8081 baseline classify"   # 터미널 2
+./gradlew bootRun                                                                # 터미널 1
+./gradlew loadTest --args="http://localhost:8081 baseline classify --warmup"     # 터미널 2 · 예열
+./gradlew loadTest --args="http://localhost:8081 baseline classify"              # 터미널 2 · 판정
 ```
 
-인자는 `<주소> <시나리오> <패스> [건수] [JDBC] [계정] [비밀번호]` 다.
+인자는 `<주소> <시나리오> <패스> [건수] [JDBC] [계정] [비밀번호]` 이고, 예열에는 `--warmup` 을 어디든 붙인다.
 
 | | 값 |
 | --- | --- |
@@ -296,6 +297,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | 패스 | `classify`(분류 판정 · 타임아웃 5초 = 워커 읽기 타임아웃) · `latency`(지연 판정 · 10초) |
 | 건수 | 생략하면 합의값 5,000 |
 | JDBC | 생략하면 `localhost:3307`. **부하를 쏘는 장비가 Mock 과 다르면 반드시 넣는다** |
+| `--warmup` | 예열 실행. 보고서 제목과 파일 이름(`warmup-…`)에 표시되고, 판정과 상관없이 0 으로 끝난다 |
 
 **실행 전 준비** — `application.yml` 의 커넥션 풀을 **30 이상**으로 둔다.
 
@@ -306,10 +308,24 @@ spring.datasource.hikari.maximum-pool-size: 30
 20 은 500 RPS 에서 병목이었다. 요청이 커넥션을 기다리며 쌓여 결과 불명이 나왔고(1차 11.2% · 2차 0%),
 불명이 없는 회차도 p95 오버헤드가 464ms 였다. 30 부터 70~99ms 로 떨어지고 50 과 차이가 없다.
 
+**MySQL 커밋 동기화가 완화돼 있는지 확인한다.** `compose.yaml` 이 `--innodb-flush-log-at-trx-commit=2
+--sync-binlog=0` 으로 띄운다. 예전에 만든 컨테이너면 `docker compose up -d` 로 다시 만든다(데이터 볼륨은 남는다).
+
+```bash
+docker exec nova-mock-mysql mysql -unova -pnova -N -e "select @@innodb_flush_log_at_trx_commit, @@sync_binlog"   # 2 0
+```
+
+기본값(1 · 1)으로 돌리면 Docker Desktop 디스크에서 COMMIT 이 평균 29ms · p99 200ms 까지 걸려 풀이 막히고, 결과 불명이
+수천 건 나온다 — 판정이 Mock 이 아니라 디스크를 잰다(load-test.md "재판정에서 드러난 것"). 보고서의 실행 조건에도 이
+설정이 찍히니 거기서 확인할 수 있다. **판정용 로컬 MySQL 에만 해당하고 RDS 는 기본값 그대로다.**
+
+JDBC 주소 끝의 `useLocalSessionState=true` 도 둔다(예시 파일에 있다). 트랜잭션마다 격리 수준을 묻는 `SELECT` 를 없앤다.
+판정을 흔든 원인은 아니었지만 비용 없이 명령 하나를 줄인다.
+
 **순서를 지켜야 한다.** 시나리오 × 패스 조합마다 이렇게 돈다.
 
 ```
-그 시나리오로 예열 1회 (버린다)
+그 시나리오로 예열 2회 (--warmup · 버린다)
   → POST /external/reset → 판정
   → POST /external/reset → 판정
   → POST /external/reset → 판정          ← 3회
@@ -320,25 +336,37 @@ spring.datasource.hikari.maximum-pool-size: 30
 | classify | `baseline` · `latency` · `timeout` |
 | latency | `baseline` · `latency` |
 
-- **예열은 시나리오마다 한다.** `baseline` 만 예열하고 `latency` 를 돌리면 첫 회차가 튄다 — 재기동
-  직후 첫 `latency` 가 결과 불명 91.9% 였고, `latency` 를 따로 예열한 뒤에는 0% 였다
+- **예열은 시나리오마다 2회 한다.** `baseline` 만 예열하고 `latency` 를 돌리면 첫 회차가 튄다 — 재기동
+  직후 첫 `latency` 가 결과 불명 91.9% 였고, `latency` 를 따로 예열한 뒤에는 0% 였다. 커밋 동기화를 완화해도
+  기동 직후 첫 예열은 p95 112ms 로 느렸다(JIT). 2회면 넉넉하다
 - **판정마다 초기화한다.** 앞 실행의 행이 남으면 "우리 키가 아닌 행" 으로 잡혀 판정이 실패한다
-- **3회씩 돌린다.** PC 가 몇 초만 멈칫해도 5,000건짜리 한 회차는 결과가 뒤집힌다. 3회를 전부 남기고,
-  보고서 맨 앞에 경고가 뜬 회차는 원인을 함께 적는다
+- **`timeout` 뒤에는 초기화 전에 몇 초 기다린다.** Mock 은 유지 시간(7초)까지 요청을 쥐고 있어서,
+  클라이언트가 5초에 포기한 직후 최대 2초는 초기화가 409 `RESET_BUSY` 다. 받으면 잠시 뒤 다시 부른다
+- **3회씩 돌린다.** PC 가 몇 초만 멈칫해도 5,000건짜리 한 회차는 결과가 뒤집힌다. 3회를 전부 남긴다
 
-보고서 맨 앞에 뜰 수 있는 경고는 셋이다.
+**판정은 하네스가 한다.** 보고서 맨 위에 **PASS · FAIL · 판정 불가** 와 규칙별 결과 표가 찍히고, 보고서 경로 바로 아래 줄에
+`판정: PASS` 처럼 한 번 더 나온다. 하네스 자체의 종료 코드는 0 · 1 · 2 지만 **`./gradlew loadTest` 로 돌리면 Gradle 이
+0 이 아닌 값을 모두 1 로 끝낸다**(출력에는 `exit value 2` 처럼 보인다). 그래서 스크립트에서 `$?` 로는 PASS 와 아닌 것만
+가르고, **FAIL 과 판정 불가는 그 `판정: …` 줄로 가른다(그 뒤에는 Gradle 의 실패 안내가 붙는다).**
 
-| 경고 | 뜻 |
-| --- | --- |
-| 발사 지연 | 클라이언트가 제때 쏘지 못했다 — PC 전체 정지. 성능 판정에서 뺀다 |
-| 미전송 | 연결을 못 맺었다. 원인(클라이언트 · Mock)을 적기 전엔 판정에 안 쓴다 |
-| 타임아웃에 걸침 | 주입한 지연 최대 + 허용 오버헤드가 응답 타임아웃을 넘는다. **쏘기 전에 콘솔에도 뜬다** |
+| 결과 | 뜻 | 대표 원인 |
+| --- | --- | --- |
+| PASS | 모든 규칙 통과 | |
+| FAIL | Mock 이 계약을 어겼거나 느리다 | 키 대조 위반 · 주입이 아닌 5xx(교착 등) · 5xx 가 실패율 범위 밖 · `timeout` 결과 불명 키가 원장에 있음 · 오버헤드 초과 |
+| **판정 불가** | 이 실행으로는 판정할 수 없다. Mock 탓으로 읽지 않는다 | 발사 지연 1초 초과 · 미전송 · 시나리오가 타임아웃에 걸침 · 원장 조회 실패 · **확인용 등록이 원장에 없음**(엉뚱한 DB) |
 
-보고서는 `build/load/` 에 남고, 클라이언트가 본 결과를 **등록 원장과 키로 대조한 판정**이 함께
-찍힌다. 지연이 평균이라 **주입한 지연**도 같이 찍히고, 오버헤드는 관측 백분위에서 주입한 지연의 같은
-백분위를 뺀 값이다. 조건은 2026-09-28 합의됐다.
+하네스는 부하 직전에 **확인용 등록**(`canary-…`) 1건을 넣는다. 끝나고 원장에서 이 키를 찾지 못하면 JDBC 가
+다른 DB 를 가리킨 것이라 판정 불가다. 대조에서는 이번 실행의 이 1건만 빠진다 — 앞 실행의 확인용 행이 남아
+있으면 초기화를 빠뜨린 것이라 "우리 키가 아닌 행" 으로 FAIL 이다.
 
-**돌리고 나서 서버 로그도 본다.** 둘 다 0건이어야 한다.
+오버헤드는 **요청마다** 관측 응답 지연에서 그 요청에 실제로 뽑힌 지연(`X-Mock-Injected-Latency-Ms`)을 빼고,
+그 분포의 p95 · p99 로 본다. 지연 판정 패스에서만 합격 조건이다.
+
+보고서는 `build/load/` 에 남는다 — 판정은 `report-<시나리오>-<패스>-<시각>.md`, 예열은 `warmup-…`.
+원장을 읽지 못해도 보고서는 남는다.
+
+**돌리고 나서 서버 로그도 본다.** 둘 다 0건이어야 한다. 하네스도 응답의 `errorMessage` 로 같은 것을 세지만,
+응답을 쓰기 전에 난 오류는 로그에만 남는다.
 
 ```
 처리하지 못한 오류          (GlobalExceptionHandler)

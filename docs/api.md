@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.6 / 2026-10-01 (진행 중인 등록 · 취소가 있으면 초기화를 409 `RESET_BUSY` 로 거절) |
+| 버전 / 작성일 | 5.7 / 2026-10-01 (등록 응답에 `X-Mock-Injected-Latency-Ms` · 설정 조회에 유지 시간 · 워커 타임아웃) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
 | 기준 | ERD v5 (`스마트폰 사전예약 + 최소 일반 판매 ERD · v5 · 2026-09-17`, dbdiagram) |
@@ -294,7 +294,9 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 
 **201 Created**
 
-응답 헤더 `X-Idempotent-Replay`(boolean) · `X-Mock-Config-Version`(integer)
+응답 헤더 `X-Idempotent-Replay`(boolean) · `X-Mock-Config-Version`(integer) · `X-Mock-Injected-Latency-Ms`(integer)
+
+`X-Mock-Injected-Latency-Ms` 는 이 요청에 **실제로 뽑힌 지연**(ms)이다. 지연이 0 이어도 `0` 을 싣는다. 지연 주입이 원장을 보기 **전**(처리 순서 1단계)이라 201 · 재생만이 아니라 **409 · 422 · 주입 실패의 500 · 주입이 아닌 500(교착 · 재시도 상한 등)에도 실린다.** 요청 형식이 틀린 400 은 주입 전에 거절되므로 없다. 부하 판정이 요청마다 `관측 − 이 값` 으로 오버헤드를 구하는 데 쓴다 — 지연을 흔들면 관측 백분위에서 주입 백분위를 빼는 것은 오버헤드의 백분위가 아니다. 워커는 쓰지 않는다.
 
 ```json
 {
@@ -646,7 +648,9 @@ Accept: application/json
   "failureRate": 0.05,
   "failureMode": "HTTP_5XX",
   "configVersion": 4,
-  "appliedAt": "2026-09-16T09:40:00.000Z"
+  "appliedAt": "2026-09-16T09:40:00.000Z",
+  "timeoutHoldMs": 7000,
+  "workerReadTimeoutMs": 5000
 }
 ```
 
@@ -655,6 +659,7 @@ Accept: application/json
 | `registerLatencyMs` | 지연의 **평균** |
 | `latencyJitter` | 지연을 흔드는 폭. 실제 대기는 `평균 × (1 ∓ 이 값)` 균등분포. **조회만 되고 변경은 안 된다** — 설정 파일로 정한다 |
 | `configVersion` · `appliedAt` | 설정을 바꿀 때마다 오르는 버전과 그 시각 |
+| `timeoutHoldMs` · `workerReadTimeoutMs` | 유지 시간과 워커 읽기 타임아웃(설정 절). **조회만 되고 변경은 안 된다** — 설정 파일로 정한다. 부하 보고서가 어떤 조건의 Mock 이었는지 남기는 데 쓴다 |
 
 `latencyJitter` 를 응답에 싣는 이유는 둘이다. 부하 하네스가 이 값으로 주입한 지연의 백분위를
 계산하고, 요구사항 5.4 가 *"적용한 설정과 실제 호출 결과를 함께 기록"* 하라고 정했다.

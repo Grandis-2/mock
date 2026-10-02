@@ -32,7 +32,7 @@ public class MockConfigController {
 
     @GetMapping
     public ConfigResponse get() {
-        return ConfigResponse.from(store.applied(), properties.latencyJitter());
+        return ConfigResponse.from(store.applied(), properties);
     }
 
     /**
@@ -47,6 +47,6 @@ public class MockConfigController {
         return ConfigResponse.from(store.update(
                 request.registerLatencyMs(),
                 request.failureRate(),
-                request.failureModeOrDefault()), properties.latencyJitter());
+                request.failureModeOrDefault()), properties);
     }
 }

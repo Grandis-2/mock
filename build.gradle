@@ -65,7 +65,10 @@ tasks.named('test') {
 //                                          jdbc:mysql://MOCK_IP:3307/external_mock?serverTimezone=UTC"
 //
 // 판정 순서 — 시나리오 × 패스 조합(5개)마다:
-//   그 조합으로 예열 1회(버림) → [POST /external/reset → 판정] × 3회
+//   그 조합으로 예열 2회(--warmup · 버림) → [POST /external/reset → 판정] × 3회
+//   예열은 인자 어디에든 --warmup 을 붙인다. 판정 결과(PASS · FAIL · 판정 불가)는 보고서 맨 위와 출력의
+//   `판정: …` 줄에 나온다. 하네스의 종료 코드는 0 · 1 · 2 지만 Gradle 을 거치면 FAIL · 판정 불가 모두 1 이라
+//   스크립트는 `판정: …` 줄로 가른다. 예열은 늘 0 으로 끝난다.
 //   조합: baseline·classify · baseline·latency · latency·classify · latency·latency · timeout·classify
 //   자세한 이유는 docs/load-test.md, 순서대로 돌리는 방법은 docs/operations.md 3장.
 tasks.register('loadTest', JavaExec) {

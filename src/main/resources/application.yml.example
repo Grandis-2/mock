@@ -13,7 +13,13 @@ spring:
   datasource:
     # compose.yaml 로 띄운 로컬 MySQL. 포트는 .env 의 MYSQL_PORT 와 맞춘다(기본 3307).
     # 본 서비스와 통합할 때는 그쪽 인스턴스 주소로 바꾼다.
-    url: jdbc:mysql://localhost:3307/external_mock?serverTimezone=UTC&characterEncoding=UTF-8
+    #
+    # useLocalSessionState=true — 지우지 않는다. 등록 · 취소 · 키 조회는 트랜잭션마다 격리 수준을 정하는데
+    # (코드의 @Transactional), 그때 스프링이 "지금 격리 수준이 뭐냐" 를 묻는 SELECT 가 매번 DB 로 나간다. 이
+    # 옵션이면 드라이버가 기억한 값으로 답해 왕복이 하나 준다(등록 1건당 명령 6 → 5, 2026-10-01 실측).
+    # 그 SELECT 는 0.1ms 짜리라 부하 판정이 흔들린 원인은 아니었다(원인은 MySQL 커밋 동기화 — compose.yaml).
+    # 비용 없이 명령 하나를 줄이니 둔다.
+    url: jdbc:mysql://localhost:3307/external_mock?serverTimezone=UTC&characterEncoding=UTF-8&useLocalSessionState=true
     # 로컬 compose 기본값이다(.env 의 MYSQL_USER / MYSQL_PASSWORD).
     # 다른 값을 쓰려면 .env 와 이 파일을 같이 고친다. 한쪽만 바꾸면 접속이 거부된다.
     username: nova

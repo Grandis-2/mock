@@ -1,5 +1,6 @@
 package com.grandis.nova.mockapi.load;
 
+import com.grandis.nova.mockapi.global.chaos.DefaultFailureInjector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -33,6 +34,9 @@ public final class LoadRunner {
 
     private static final java.util.regex.Pattern EXTERNAL_NUMBER =
             java.util.regex.Pattern.compile("\"externalNumber\"\\s*:\\s*\"([^\"]+)\"");
+
+    private static final java.util.regex.Pattern ERROR_MESSAGE =
+            java.util.regex.Pattern.compile("\"errorMessage\"\\s*:\\s*\"([^\"]*)\"");
 
     private final LoadPlan plan;
     private final HttpClient client;
@@ -105,7 +109,7 @@ public final class LoadRunner {
     }
 
     /**
-     * 계획한 시각까지 기다렸다가 보낸다. 늦었으면 바로 보내고 <b>얼마나 늦었는지 남긴다.</b>
+     * 계획한 시각까지 기다렸다가 보낸다. 늦었든 늦게 깨어났든 <b>예정보다 얼마나 늦게 보냈는지 남긴다.</b>
      *
      * <p>이 시험은 5,000건을 10초에 고르게 쏘는 것이 전제다. 발사가 몇 초씩 밀렸다면 그 실행은
      * <b>목표 부하를 만들지 못한 것</b>이고, 요구사항 8장은 그런 시험을 성능 합격으로 판정하지
@@ -113,9 +117,7 @@ public final class LoadRunner {
      */
     private void sendAt(Instant startedAt, long dueNanos, String key) {
         long waitNanos = dueNanos - Duration.between(startedAt, Instant.now()).toNanos();
-        if (waitNanos <= 0) {
-            trackLag(-waitNanos);
-        } else {
+        if (waitNanos > 0) {
             try {
                 Thread.sleep(Duration.ofNanos(waitNanos));
             } catch (InterruptedException e) {
@@ -124,11 +126,16 @@ public final class LoadRunner {
                 return;
             }
         }
+        // 잠든 뒤에도 잰다. 예정 시각까지 잠들었다가 PC 가 멈칫해 몇 초 늦게 깨어나면, 처음부터 늦은 경우만
+        // 보던 예전 방식으로는 기록되지 않았다(리뷰 H3 ②). 깨어난 지금이 예정보다 얼마나 늦었는지가 발사 지연이다.
+        trackLag(Duration.between(startedAt, Instant.now()).toNanos() - dueNanos);
         send(key);
     }
 
-    private void trackLag(long lagNanos) {
-        maxLaunchLagNanos.updateAndGet(previous -> Math.max(previous, lagNanos));
+    /** 음수(예정보다 일찍 깸)는 0 으로 본다. 최대치만 남긴다 — 한 번이라도 크게 밀렸으면 그 실행은 무효다. */
+    void trackLag(long lagNanos) {
+        long lag = Math.max(lagNanos, 0);
+        maxLaunchLagNanos.updateAndGet(previous -> Math.max(previous, lag));
     }
 
     private void send(String key) {
@@ -144,20 +151,27 @@ public final class LoadRunner {
         try {
             // 본문을 버리지 않고 읽는다. 201 의 예약번호를 DB 에 적힌 번호와 맞춰 봐야 하기 때문이다.
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            Duration latency = Duration.between(sentAt, Instant.now());
             Outcome outcome = Outcome.ofStatus(response.statusCode());
             report.add(new LoadReport.Attempt(
                     key,
                     outcome == Outcome.ACCEPTED ? externalNumberOf(response.body()) : null,
                     outcome,
                     response.statusCode(),
-                    Duration.between(sentAt, Instant.now())));
+                    latency,
+                    injectedMsOf(response),
+                    response.statusCode() >= 500 ? errorMessageOf(response.body()) : null));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             report.add(new LoadReport.Attempt(
-                    key, null, Outcome.UNKNOWN, 0, Duration.between(sentAt, Instant.now())));
+                    key, null, Outcome.UNKNOWN, 0, Duration.between(sentAt, Instant.now()), null,
+                    e.getClass().getSimpleName()));
         } catch (Exception e) {
+            // 예외 종류를 남긴다. 결과 불명 · 미전송이 "응답 타임아웃" 인지 "연결 거부" 인지 보고서에서 갈라 봐야
+            // 원인을 Mock 과 PC 중 어디서 찾을지 정한다.
             report.add(new LoadReport.Attempt(
-                    key, null, Outcome.ofFailure(e), 0, Duration.between(sentAt, Instant.now())));
+                    key, null, Outcome.ofFailure(e), 0, Duration.between(sentAt, Instant.now()), null,
+                    e.getClass().getSimpleName()));
         } finally {
             inFlight.decrementAndGet();
         }
@@ -172,6 +186,33 @@ public final class LoadRunner {
     private static String externalNumberOf(String body) {
         var matcher = EXTERNAL_NUMBER.matcher(body);
         return matcher.find() ? matcher.group(1) : null;
+    }
+
+    /** 5xx 의 {@code errorMessage}. 본문이 없으면(유지 시간 뒤의 빈 500) "(본문 없음)" 이다. */
+    private static String errorMessageOf(String body) {
+        if (body == null || body.isBlank()) {
+            return "(본문 없음)";
+        }
+        var matcher = ERROR_MESSAGE.matcher(body);
+        return matcher.find() ? matcher.group(1) : "(errorMessage 없음)";
+    }
+
+    /**
+     * 이 요청에 Mock 이 실제로 넣은 지연. 요청마다 오버헤드를 구하는 데 쓴다.
+     *
+     * <p>없으면 null 이다. 등록 응답에는 반드시 있어야 하므로(지연 0 이어도 {@code 0}), 남으면 보고서가
+     * 그 건수를 경고로 적는다.
+     */
+    private static Long injectedMsOf(HttpResponse<?> response) {
+        return response.headers().firstValue(DefaultFailureInjector.INJECTED_LATENCY_HEADER)
+                .map(value -> {
+                    try {
+                        return Long.valueOf(value.trim());
+                    } catch (NumberFormatException e) {
+                        return null;
+                    }
+                })
+                .orElse(null);
     }
 
     private void trackEnter() {
@@ -200,7 +241,7 @@ public final class LoadRunner {
                 // 관찰 종료 조건을 넘긴 요청. 버리지 않고 결과 불명으로 센다.
                 future.cancel(true);
                 report.add(new LoadReport.Attempt(
-                        keys[i], null, Outcome.UNKNOWN, 0, plan.responseTimeout()));
+                        keys[i], null, Outcome.UNKNOWN, 0, plan.responseTimeout(), null, "관찰 종료 초과"));
             }
         }
     }
