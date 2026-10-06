@@ -569,7 +569,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | --- | --- | --- |
 | 1 | 201 · 번호 발급 | **201** · `X-Idempotent-Replay: false` · `R-20260929-8855269550` · `ACTIVE` · 0.75초. DB 1행 |
 | 2 | 같은 번호 · 재생 헤더 | **201** · `X-Idempotent-Replay: true` · **같은 번호 · 같은 `confirmedAt`** · 0.57초. 키 조회 `storedOutcome: SUCCESS`. DB 여전히 1행 |
-| 3 | 422 · 기존 등록 보존 | **422 `KEY_PAYLOAD_MISMATCH`** · "optionCode 이(가) 다릅니다" · `externalNumber` 에 기존 번호. 번호 조회의 `optionCode` 는 `256-BLK` 그대로 |
+| 3 | 422 · 기존 등록 보존 | **422 `KEY_PAYLOAD_MISMATCH`** · "optionCode 이(가) 다릅니다" · `externalNumber` 에 기존 번호. 번호 조회의 `sku` 는 `256-BLK` 그대로 |
 | 4 | 실패는 저장되지 않는다 | **500 `UPSTREAM_UNAVAILABLE`**(`replayable: false`) → 키 조회 **404** → 0.0 으로 내리고 재시도 **201 · `X-Idempotent-Replay: false`** · 새 번호. DB 2행 |
 
 **말로 짚을 것**

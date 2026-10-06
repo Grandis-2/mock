@@ -3,14 +3,14 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.11 / 2026-10-06 (등록 · 취소 요청을 preorder 본문에 맞춤 — `ourReservationId` · `customerRef` · `itemCode` · `optionCode` · `qty` · `scope`, 취소 `reservationNo`) |
+| 버전 / 작성일 | 5.11 / 2026-10-06 (등록 · 취소 요청을 preorder 본문으로 — `ourReservationId` · `customerRef` · `itemCode` · `optionCode` · `qty` · `scope`, 취소 `reservationNo`. 원장 · 응답은 ERD 그대로) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
-| 기준 | 본 서비스(preorder)의 요청 본문 `RegisterRequestPayload` · `CancelRequestPayload`. be 결정(2026-10-06)으로 ERD 보다 이쪽을 따른다. ERD 의 `external_mock` 영역은 아직 옛 칸(`customer_id` · `product_id` · `sku`)이다 |
+| 기준 | 원장 · 응답은 ERD v14.1 (2026-10-06) 의 `external_mock` 영역 — 칸 · 제약은 v5(2026-09-17)와 같다. 요청 본문은 본 서비스(preorder)의 `RegisterRequestPayload` · `CancelRequestPayload` (be 결정, 2026-10-06) |
 
 **이 문서가 Mock API 계약의 정본이다.** 계약을 바꾸려면 이 파일을 고치는 PR 로 하고, 구현과 다르면 둘 중 하나가 버그다.
 
-요청 본문은 본 서비스가 보내는 이름 · 타입 그대로다. 예전 Mock 이름(`customerId` · `productId` · `sku` · 취소의 `externalNumber`)은 쓰지 않으며, 보내면 모르는 필드라 400 이다. 응답의 예약번호는 `externalNumber` 그대로다(본 서비스 워커가 아직 없어 읽는 쪽 이름이 정해지지 않았고, be 의 성공 이벤트도 같은 이름을 쓴다).
+**요청은 preorder 형식, 원장 · 응답은 ERD 형식이다.** 요청 본문은 본 서비스가 보내는 이름 · 타입 그대로 받고, 원장에는 ERD 칸(`customer_id` · `product_id` · `sku`)으로 바꿔 넣는다(「내용 비교」). 요청에 예전 Mock 이름(`customerId` · `productId` · `sku` · 취소의 `externalNumber`)을 보내면 모르는 필드라 400 이다. 응답은 원장 이름(`customerId` · `productId` · `sku`)이고 예약번호는 `externalNumber` 다 — 본 서비스 워커가 아직 없어 읽는 쪽 이름이 정해지지 않았고, be 의 성공 이벤트도 같은 이름을 쓴다.
 
 ---
 
@@ -115,7 +115,7 @@ Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RE
 | 필수 값 누락 | `optionCode 은(는) 필수입니다.` |
 | 타입이 다른 값 | `customerRef 값의 형식이 올바르지 않습니다.` |
 | 같은 필드 두 번 | `customerRef 필드가 두 번 왔습니다.` |
-| 길이 · 범위 · 형식 | `optionCode 은(는) 80자 이하여야 합니다.` · `qty 은(는) 1 이상이어야 합니다.` · `Idempotency-Key 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다.` |
+| 길이 · 범위 · 형식 | `optionCode 은(는) 80자 이하여야 합니다.` · `customerRef 은(는) 0 으로 시작하지 않는 1~18자리 숫자여야 합니다.` · `qty 은(는) 1 이어야 합니다.` · `Idempotency-Key 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다.` |
 | 본문 키 ≠ 헤더 키 | `ourReservationId 가 Idempotency-Key 와 다릅니다.` |
 | 필수 헤더 누락 | `Idempotency-Key 헤더가 필요합니다.` |
 | `Content-Type` | `Content-Type 이 application/json 이어야 합니다. 받은 값: application/*` |
@@ -168,40 +168,42 @@ ERD 의 `preorder_token` 은 `char(36)` UUID 이며 "공개 UUID 이자 외부 M
 
 ## 내용 비교
 
-같은 키의 재요청이 **같은 신청인지** 판정할 때 저장된 행의 아래 다섯 칸을 요청과 직접 비교한다.
+같은 키의 재요청이 **같은 신청인지** 판정할 때 저장된 행의 아래 세 칸(ERD)을 요청과 직접 비교한다. 요청은 preorder 형식이라 바꿔서 비교한다.
 
-```
-customerRef · itemCode · optionCode · qty · scope
-```
+| 원장 칸 (ERD) | 요청 필드 | 바꾸는 법 |
+| --- | --- | --- |
+| `customer_id` | `customerRef` | 숫자로. **0 으로 시작하지 않는 1~18자리 숫자만** 받는다 |
+| `product_id` | `itemCode` | 숫자로. 같은 규칙 |
+| `sku` | `optionCode` | 그대로 |
 
-ERD 에서 `request_hash` 를 제거했으므로 지문 대신 칼럼을 본다. 신청 내용이 이미 행에 남아 있고, 어느 필드가 달라 거절됐는지 응답에 담을 수 있다.
+ERD 에서 `request_hash` 를 제거했으므로 지문 대신 칼럼을 본다. 신청 내용이 이미 행에 남아 있고, 어느 필드가 달라 거절됐는지 응답에 담을 수 있다. **거절 문장에는 요청 필드 이름**(`customerRef` · `itemCode` · `optionCode`)을 쓴다 — 보낸 쪽이 자기 본문에서 찾을 수 있어야 한다.
 
-**글자 그대로 비교한다.** 참조 · 코드를 숫자로 바꿔 비교하지 않으므로 `"1001"` 과 `"01001"` 은 다른 신청이다. 형식은 본 서비스가 정하고, Mock 은 받은 값을 바꾸지 않는다. `ourReservationId` 는 키와 같은 값이라 비교 대상이 아니다.
+- **앞에 0 이 붙은 참조는 400 이다.** `"01001"` 을 받아 1001 로 바꾸면 `"1001"` 과 조용히 같은 신청이 된다. 숫자가 아닌 값(`"C-1001"`)과 19자리 이상(`long` 범위를 넘을 수 있음)도 400 이다. 본 서비스는 `String.valueOf(id)` 로 보내므로 걸리지 않는다.
+- **`qty` · `scope` 는 저장 · 비교하지 않는다**(ERD 에 칸 없음). 사전예약은 수량 1 고정이라 `qty` 는 1 만 받고, 그 밖은 같은 키 · 다른 내용(422)이 아니라 잘못된 요청(400)이다. **`scope` 는 비교하지 않으므로 같은 키로 `scope` 만 달라도 재생된다.**
+- `ourReservationId` 는 키와 같은 값이라 비교 대상이 아니다. 다르면 처리 전에 400 이다.
 
 **본 서비스가 같은 키로 다른 내용을 보내는 것은 정상 흐름이 아니다.** `preorder_sync_jobs.request_payload` 가 접수 때 고정되기 때문이다. 그래도 거절하는 이유는 그 버그를 조용히 넘기지 않기 위해서다.
 
 ## 등록 자원의 필드
 
-`docs/schema.sql` 의 `preorder_registrations` 와 1:1 이다. ERD 의 `external_mock` 영역은 아직 옛 칸이라 ERD 를 갱신할 때 이 표에 맞춘다.
+ERD v14.1 `external_mock.preorder_registrations` 와 1:1 이다. 응답 · 조회는 이 이름으로 나간다.
 
-| 필드 | 타입 | 칸 | 설명 |
+| 필드 | 타입 | ERD 칸 | 설명 |
 | --- | --- | --- | --- |
 | `externalKey` | string | `external_key` (PK) | 우리 `preorders.preorder_token`. 등록 본문의 `ourReservationId` 와 같은 값 |
 | `externalNumber` | string | `external_number` (UNIQUE) | Mock 이 최초 등록에서 발급. 등록 전 취소 표식이면 `null` |
-| `customerRef` | string | `customer_ref` | 고객 참조. 지금은 `customers.id` 를 문자열로 보낸다 |
-| `itemCode` | string | `item_code` | 상품 코드. 지금은 `products.id` 문자열 |
-| `optionCode` | string | `option_code` | 옵션 코드. `product_options.sku` |
-| `qty` | integer | `qty` | 수량. 지금은 항상 1 |
-| `scope` | string | `scope` | 요청 범위. 지금은 `preorder` |
+| `customerId` | integer | `customer_id` | 우리 `customers.id`. 요청의 `customerRef` 를 숫자로 바꾼 값. 물리 FK 없음 |
+| `productId` | integer | `product_id` | 우리 `products.id`. 요청의 `itemCode` |
+| `sku` | string | `sku` | 우리 `product_options.sku`. 요청의 `optionCode` |
 | `status` | string | `status` | `ACTIVE` / `CANCELED` |
 | `confirmedAt` | datetime | `confirmed_at` | 등록을 확정한 시각 |
 | `canceledAt` | datetime | `canceled_at` | 취소 표식을 남긴 시각 |
 
-`status = ACTIVE` 이면 나머지 필드가 모두 채워져 있어야 한다. `ck_registration_active_fields` CHECK 가 그것이다. 등록 전 취소는 키·상태·취소 시각만 있는 행으로 남는다.
+`status = ACTIVE` 이면 나머지 필드가 모두 채워져 있어야 한다. ERD 의 `ck_registration_active_fields` CHECK 가 그것이다. 등록 전 취소는 키·상태·취소 시각만 있는 행으로 남는다.
 
 시각은 모두 UTC 이고 **밀리초 세 자리**로 쓴다(`2026-09-16T10:00:03.000Z`). 밀리초가 0 이어도 `.000` 을 붙인다. 제어 API 의 `appliedAt` · `createdAt` 도 같다.
 
-`qty` 는 본 서비스가 보내는 값을 그대로 저장한다. 사전예약은 지금 수량 1 고정이라 항상 1 이고, 1 미만은 400 이다(`ck_registration_qty`).
+수량 칸은 ERD 에서 제거했다. 사전예약 신청 단위가 수량 1 고정이고 `preorders` 에도 수량 칸이 없다. 요청의 `qty` 는 1 인지만 검사한다.
 
 ## 시험 프리셋
 
@@ -257,16 +259,16 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 
 **Body**
 
-본 서비스의 `RegisterRequestPayload` 그대로다.
+본 서비스의 `RegisterRequestPayload` 그대로다. 원장에 들어가는 칸은 「내용 비교」 표를 따른다.
 
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | `ourReservationId` | string | 필수 | 우리 `preorder_token`. **`Idempotency-Key` 헤더와 같아야 한다** — 다르면 400(어느 키로도 저장하지 않음) |
-| `customerRef` | string | 필수 | 고객 참조. 지금은 `customers.id` 문자열. `maxLength=100` |
-| `itemCode` | string | 필수 | 상품 코드. 지금은 `products.id` 문자열. `maxLength=100` |
-| `optionCode` | string | 필수 | 옵션 코드. `product_options.sku`. `maxLength=80` |
-| `qty` | integer | 필수 | 수량. `min=1`. 지금은 항상 1 |
-| `scope` | string | 필수 | 요청 범위. 지금은 `preorder`. `maxLength=50` |
+| `customerRef` | string | 필수 | `customers.id` 문자열 → `customer_id`. **0 으로 시작하지 않는 1~18자리 숫자** |
+| `itemCode` | string | 필수 | `products.id` 문자열 → `product_id`. 같은 규칙 |
+| `optionCode` | string | 필수 | `product_options.sku` → `sku`. `maxLength=80` |
+| `qty` | integer | 필수 | 수량. **1 만** 받는다. 저장하지 않는다 |
+| `scope` | string | 필수 | 요청 범위. 지금은 `preorder`. `maxLength=50`. 저장 · 비교하지 않는다 |
 
 ```json
 {
@@ -315,11 +317,9 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 {
   "externalKey": "9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
   "externalNumber": "R-20260916-0048213579",
-  "customerRef": "1001",
-  "itemCode": "12",
-  "optionCode": "SM-G999-256-BLK",
-  "qty": 1,
-  "scope": "preorder",
+  "customerId": 1001,
+  "productId": 12,
+  "sku": "SM-G999-256-BLK",
   "status": "ACTIVE",
   "confirmedAt": "2026-09-16T10:00:03.412Z",
   "canceledAt": null
@@ -330,9 +330,9 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
-| 400 | `INVALID_REQUEST` | 필수 값 누락 · 계약에 없는 필드 · 키 길이 · `ourReservationId` ≠ 헤더 키 |
+| 400 | `INVALID_REQUEST` | 필수 값 누락 · 계약에 없는 필드 · 키 길이 · `ourReservationId` ≠ 헤더 키 · 참조가 숫자 형식이 아님 · `qty` ≠ 1 |
 | 409 | `KEY_CANCELED` | 취소 표식이 있는 키 |
-| **422** | **`KEY_PAYLOAD_MISMATCH`** | **같은 키로 다른 `customerRef`·`itemCode`·`optionCode`·`qty`·`scope`** |
+| **422** | **`KEY_PAYLOAD_MISMATCH`** | **같은 키로 다른 `customerRef`·`itemCode`·`optionCode`** (`scope` 는 비교하지 않음) |
 | 500 | `UPSTREAM_UNAVAILABLE` | `failureMode=HTTP_5XX` 의 주입 실패. 커밋 전 |
 
 ```json
@@ -351,6 +351,9 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 | 같은 키·같은 내용 연속 2회 | 같은 번호. 2회차 `X-Idempotent-Replay: true` |
 | **같은 키·다른 optionCode** | **422 `KEY_PAYLOAD_MISMATCH`. 기존 등록 그대로** |
 | `ourReservationId` 가 헤더 키와 다름 | 400 `INVALID_REQUEST`. 어느 키로도 저장 안 됨 |
+| `customerRef` 가 `"01001"` · `"C-1001"` | 400 `INVALID_REQUEST`. `"1001"` 과 같은 신청으로 보지 않음 |
+| `qty` 가 1 이 아님 | 400 `INVALID_REQUEST` (422 아님) |
+| 같은 키 · `scope` 만 다름 | 201 재생 (`scope` 는 비교하지 않음) |
 | 같은 키 동시 10건 | 정확히 1건만 등록. 번호 1개. 9건은 `X-Idempotent-Replay: true` |
 | 취소된 키로 등록 시도 | 409 `KEY_CANCELED`. 등록 생성 안 됨 |
 | **등록 성공 → 취소 → 같은 키 재등록** | **409 `KEY_CANCELED`.** 201 재생이 아님 |
@@ -545,7 +548,7 @@ Accept: application/json
 | --- | --- | --- | --- |
 | `externalKey` | string | 조건부 | 우리 `preorder_token`. 영문 · 숫자 · `. _ -` 1~100자 |
 | `reservationNo` | string | 조건부 | Mock 이 발급한 예약번호(등록 응답의 `externalNumber`). 영문 · 숫자 · `. _ -` 1~100자. 등록이 확인되지 않았으면 `null` |
-| `reason` | string | 선택 | `USER_CANCEL` · `ADMIN_CANCEL` · `DEADLINE_EXCEEDED` · `RETRY_EXHAUSTED` · `GHOST_COMPENSATION` 등. **저장하지 않는다** (ERD 에 칸 없음) |
+| `reason` | string | 선택 | `USER_CANCEL` · `ADMIN_CANCEL` · `DEADLINE_EXCEEDED` · `GHOST_COMPENSATION`(정합성 검사의 키로 취소) 등. **저장하지 않는다** (ERD 에 칸 없음) |
 
 ```json
 {
