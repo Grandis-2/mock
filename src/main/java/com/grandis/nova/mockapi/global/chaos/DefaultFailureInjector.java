@@ -78,6 +78,16 @@ public class DefaultFailureInjector implements FailureInjector {
 
     private void sleep(long waitMs) {
         announce(waitMs);
+        pause(waitMs, "지연 대기 중 중단됐다");
+    }
+
+    /**
+     * 일부러 기다린다. 지연 주입과 느린 성공 결함({@link InMemoryFaultStore#holdBeforeCommit})이 같이 쓴다 — 대기 중
+     * 중단을 같은 방식으로 다룬다.
+     *
+     * <p>중단되면 500 이다. 트랜잭션 밖 · 커밋 전이라 저장된 것이 없으니 워커에게는 일시 실패가 맞다.
+     */
+    static void pause(long waitMs, String interruptedMessage) {
         if (waitMs <= 0) {
             return;
         }
@@ -86,7 +96,22 @@ public class DefaultFailureInjector implements FailureInjector {
         } catch (InterruptedException e) {
             // 인터럽트 상태를 되살려 둔다. 삼키면 종료 신호가 묻힌다.
             Thread.currentThread().interrupt();
-            throw new MockException(ErrorCode.UPSTREAM_UNAVAILABLE, "지연 대기 중 중단됐다");
+            throw new MockException(ErrorCode.UPSTREAM_UNAVAILABLE, interruptedMessage);
+        }
+    }
+
+    /**
+     * 지연 주입 뒤에 더 기다린 만큼 {@code X-Mock-Injected-Latency-Ms} 에 더한다. 느린 성공 결함이 쓴다.
+     *
+     * <p>더하지 않으면 그 대기가 부하 판정에서 "Mock 의 오버헤드" 로 잡힌다. 헤더가 아직 없으면(지연 주입을 거치지
+     * 않은 호출) 이 값만 싣는다.
+     */
+    static void announceMore(long extraMs) {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes servlet
+                && servlet.getResponse() != null) {
+            String current = servlet.getResponse().getHeader(INJECTED_LATENCY_HEADER);
+            long base = current == null ? 0 : Long.parseLong(current);
+            servlet.getResponse().setHeader(INJECTED_LATENCY_HEADER, Long.toString(base + extraMs));
         }
     }
 

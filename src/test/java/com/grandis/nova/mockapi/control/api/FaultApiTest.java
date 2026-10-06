@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.control.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -77,7 +78,7 @@ class FaultApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errorMessage")
-                        .value("faultType 은(는) RESPONSE_LOST_AFTER_COMMIT 중 하나여야 합니다. 받은 값: BOOM"));
+                        .value("faultType 은(는) RESPONSE_LOST_AFTER_COMMIT, SLOW_SUCCESS 중 하나여야 합니다. 받은 값: BOOM"));
 
         assertThat(store.consumeResponseLost(KEY)).isFalse();
     }
@@ -154,12 +155,64 @@ class FaultApiTest {
     @DisplayName("계약에 없는 필드가 오면 400")
     void unknownField() throws Exception {
         inject("""
-                {"externalKey":"test-lost-1","faultType":"RESPONSE_LOST_AFTER_COMMIT","delayMs":100}""")
+                {"externalKey":"test-lost-1","faultType":"RESPONSE_LOST_AFTER_COMMIT","repeat":2}""")
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage", containsString("delayMs 은(는) 알 수 없는 필드입니다.")))
+                .andExpect(jsonPath("$.errorMessage", containsString("repeat 은(는) 알 수 없는 필드입니다.")))
                 .andExpect(jsonPath("$.errorMessage", containsString("externalKey")))
                 .andExpect(jsonPath("$.errorMessage", containsString("faultType")));
 
+        assertThat(store.consumeResponseLost(KEY)).isFalse();
+    }
+
+    // ---------------------------------------------------------------- 느린 성공 (NV-261)
+
+    @Test
+    @DisplayName("느린 성공을 걸면 201 이고 대기 시간을 돌려준다. 응답 유실에는 대기 시간이 없다")
+    void injectsSlowSuccess() throws Exception {
+        inject("""
+                {"externalKey":"test-lost-1","faultType":"SLOW_SUCCESS","delayMs":30}""")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.faultType").value("SLOW_SUCCESS"))
+                .andExpect(jsonPath("$.delayMs").value(30));
+
+        // 응답만 보면 정말 걸렸는지 알 수 없다
+        assertThat(store.holdBeforeCommit(KEY)).isEqualTo(30);
+
+        inject("""
+                {"externalKey":"test-lost-1","faultType":"RESPONSE_LOST_AFTER_COMMIT"}""")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.delayMs").value(nullValue()));
+    }
+
+    /**
+     * 느린 성공에 대기 시간이 없으면 0초라 건 의미가 없고, 응답 유실에 대기 시간을 주면 조용히 버려져 보낸 사람이
+     * "기다렸다 응답을 잃는다" 고 믿는다. 둘 다 결함을 걸지 않고 400 이다.
+     */
+    @Test
+    @DisplayName("느린 성공에 delayMs 가 없거나 · 범위 밖이거나 · 응답 유실에 delayMs 를 주면 400, 결함을 걸지 않는다")
+    void rejectsMismatchedDelay() throws Exception {
+        String[][] cases = {
+                {"""
+                {"externalKey":"test-lost-1","faultType":"SLOW_SUCCESS"}""",
+                        "delayMs 은(는) SLOW_SUCCESS 에 필수입니다."},
+                {"""
+                {"externalKey":"test-lost-1","faultType":"SLOW_SUCCESS","delayMs":0}""",
+                        "delayMs 은(는) 1 이상이어야 합니다."},
+                {"""
+                {"externalKey":"test-lost-1","faultType":"SLOW_SUCCESS","delayMs":60001}""",
+                        "delayMs 은(는) 60000 이하여야 합니다."},
+                {"""
+                {"externalKey":"test-lost-1","faultType":"RESPONSE_LOST_AFTER_COMMIT","delayMs":6000}""",
+                        "delayMs 은(는) SLOW_SUCCESS 에만 씁니다."}};
+
+        for (String[] c : cases) {
+            inject(c[0])
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.errorMessage", containsString(c[1])));
+        }
+
+        assertThat(store.holdBeforeCommit(KEY)).isZero();
         assertThat(store.consumeResponseLost(KEY)).isFalse();
     }
 }

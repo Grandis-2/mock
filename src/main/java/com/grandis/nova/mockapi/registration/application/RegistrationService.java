@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
  *
  * <pre>
  * [트랜잭션 밖]  1. 지연 대기   2. 실패율 판정          ← FailureInjector
+ *               2-1. 느린 성공 결함이면 정한 시간 기다리기(잠금 전)  ← FaultHook
  * [트랜잭션 안]  3~6. 잠금 · 취소 표식 · 재생 · 저장    ← RegistrationWriter (시도 한 번)
  *               중복 키면 트랜잭션을 나와 3단계부터 다시
  * [커밋 후]     7. 결함이 걸려 있으면 응답 없이 끊기   ← FaultHook · ConnectionDropper
@@ -45,6 +46,10 @@ public class RegistrationService {
         // 실패는 커밋 전이라 아무것도 저장되지 않는다. TIMEOUT 이면 여기서 응답 없이 끝난다.
         ConfigSnapshot snapshot = configProvider.snapshot();
         failureInjector.apply(snapshot);
+
+        // 2-1. 느린 성공 결함이 걸린 키면 여기서 기다린다. 잠금 전 · 트랜잭션 밖이라 그사이 키 조회는 404 이고,
+        // 같은 키 재시도 · 취소가 먼저 끝날 수 있다. 지연 주입 앞에 두면 기다린 뒤 주사위에 걸려 "느린 실패" 가 된다.
+        faultHook.holdBeforeCommit(key);
 
         // 3~6. 중복 키면 트랜잭션을 나와 3단계부터 다시
         Attempt attempt = DuplicateKeyRetry.run(key, () -> writer.attemptOnce(key, command));
