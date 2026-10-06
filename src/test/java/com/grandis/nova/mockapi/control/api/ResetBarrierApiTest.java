@@ -11,6 +11,7 @@ import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -40,8 +41,6 @@ import org.springframework.test.web.servlet.MvcResult;
 @AutoConfigureMockMvc
 class ResetBarrierApiTest {
 
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
     private static final String RESET = """
             {"confirm":"RESET"}""";
 
@@ -83,7 +82,7 @@ class ResetBarrierApiTest {
             Future<MvcResult> registration = pool.submit(() -> mvc.perform(post("/external/reservations")
                     .header("Idempotency-Key", key)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(BODY)).andReturn());
+                    .content(RegisterBodies.of(key))).andReturn());
             awaitInFlight(1);
 
             // 지연 중인 키를 취소한다. 등록 전이라 표식만 남는다.
@@ -129,7 +128,7 @@ class ResetBarrierApiTest {
             Future<MvcResult> registration = pool.submit(() -> mvc.perform(post("/external/reservations;x=1")
                     .header("Idempotency-Key", key)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(BODY)).andReturn());
+                    .content(RegisterBodies.of(key))).andReturn());
             awaitInFlight(1);
 
             mvc.perform(post("/external/reset").contentType(MediaType.APPLICATION_JSON).content(RESET))

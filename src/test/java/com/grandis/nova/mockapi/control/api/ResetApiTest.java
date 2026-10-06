@@ -94,8 +94,8 @@ class ResetApiTest {
 
     /** 번호는 UNIQUE 라 키로 만들어 겹치지 않게 한다. 형식은 이 시험과 무관하다. */
     private void saveActive(String key) {
-        repository.save(Registration.active(key, "R-" + key, 1001L, 12L,
-                "SM-G999-256-BLK", Instant.now()));
+        repository.save(Registration.active(key, "R-" + key, "1001", "12",
+                "SM-G999-256-BLK", 1, "preorder", Instant.now()));
     }
 
     /**

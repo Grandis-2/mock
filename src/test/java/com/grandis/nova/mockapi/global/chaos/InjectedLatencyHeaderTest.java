@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.mockapi.global.config.MockProperties;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,8 +29,6 @@ import org.springframework.test.web.servlet.ResultActions;
 class InjectedLatencyHeaderTest {
 
     private static final String HEADER = DefaultFailureInjector.INJECTED_LATENCY_HEADER;
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
     @Autowired
     private MockMvc mvc;
@@ -95,6 +94,6 @@ class InjectedLatencyHeaderTest {
         return mvc.perform(post("/external/reservations")
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY));
+                .content(RegisterBodies.of(key)));
     }
 }

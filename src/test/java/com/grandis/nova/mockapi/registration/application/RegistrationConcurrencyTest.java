@@ -79,7 +79,7 @@ class RegistrationConcurrencyTest {
                     "--character-set-server=utf8mb4",
                     "--collation-server=utf8mb4_0900_ai_ci");
 
-    private static final RegisterCommand COMMAND = new RegisterCommand(1001L, 12L, "SM-G999-256-BLK");
+    private static final RegisterCommand COMMAND = new RegisterCommand("1001", "12", "SM-G999-256-BLK", 1, "preorder");
 
     /** 동시성 버그는 경합에서만 나온다. 한 번 통과는 증명이 아니다(명세: 최소 100회). */
     private static final int ROUNDS = 100;

@@ -58,7 +58,7 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    /** Jackson 의 중복 필드 메시지({@code Duplicate Object property "customerId"})에서 이름을 꺼낸다. */
+    /** Jackson 의 중복 필드 메시지({@code Duplicate Object property "customerRef"})에서 이름을 꺼낸다. */
     private static final Pattern QUOTED = Pattern.compile("\"([^\"]+)\"");
 
     /** Mock 이 계약대로 내는 오류. */

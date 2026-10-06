@@ -12,6 +12,7 @@ import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -38,8 +39,6 @@ import tools.jackson.databind.json.JsonMapper;
 class RegistrationLookupApiTest {
 
     private static final String PATH = "/external/reservations";
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
     /** 밀리초가 0 이 아니어야 응답의 시각 형식을 글자 그대로 비교할 수 있다. */
     private static final Instant CANCELED_AT = Instant.parse("2026-09-16T10:10:00.123Z");
@@ -76,7 +75,7 @@ class RegistrationLookupApiTest {
         String body = mvc.perform(post(PATH)
                         .header("Idempotency-Key", key)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(BODY))
+                        .content(RegisterBodies.of(key)))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return json.readTree(body);

@@ -10,6 +10,7 @@ import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -41,8 +42,6 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureMockMvc
 class ConfigChangeInFlightTest {
 
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
     /** 바꾸기 전 설정의 지연. 바꾼 뒤(0)와 달라야 주입 지연 헤더로 어느 설정을 썼는지 보인다. */
     private static final int IN_FLIGHT_LATENCY_MS = 300;
@@ -87,7 +86,7 @@ class ConfigChangeInFlightTest {
         return mvc.perform(post("/external/reservations")
                         .header("Idempotency-Key", key)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(BODY))
+                        .content(RegisterBodies.of(key)))
                 .andReturn().getResponse();
     }
 

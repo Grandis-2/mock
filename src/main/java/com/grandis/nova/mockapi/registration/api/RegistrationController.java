@@ -1,5 +1,7 @@
 package com.grandis.nova.mockapi.registration.api;
 
+import com.grandis.nova.mockapi.global.error.ErrorCode;
+import com.grandis.nova.mockapi.global.error.MockException;
 import com.grandis.nova.mockapi.global.validation.Identifiers;
 import com.grandis.nova.mockapi.registration.application.RegisterResult;
 import com.grandis.nova.mockapi.registration.application.RegistrationReader;
@@ -45,6 +47,12 @@ public class RegistrationController {
             @RequestHeader(IDEMPOTENCY_KEY) String key,
             @Valid @RequestBody RegisterRequest request) {
         Identifiers.requireFormat(IDEMPOTENCY_KEY, key);
+        // 본문의 키와 헤더의 키는 같은 값(preorder_token)이다. 다르면 어느 쪽으로 멱등 처리할지 정할 수 없다.
+        // 처리 전에 거절하므로 저장된 것은 없다.
+        if (!key.equals(request.ourReservationId())) {
+            throw new MockException(ErrorCode.INVALID_REQUEST,
+                    "ourReservationId 가 " + IDEMPOTENCY_KEY + " 와 다릅니다.");
+        }
 
         RegisterResult result = service.register(key, request.toCommand());
 

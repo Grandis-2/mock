@@ -13,6 +13,7 @@ import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -51,8 +52,6 @@ import tools.jackson.databind.json.JsonMapper;
 class SlowSuccessApiTest {
 
     private static final String RESERVATIONS = "/external/reservations";
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
     private static final String REPLAY = "X-Idempotent-Replay";
     private static final String INJECTED = "X-Mock-Injected-Latency-Ms";
 
@@ -110,7 +109,7 @@ class SlowSuccessApiTest {
         return mvc.perform(post(RESERVATIONS)
                         .header("Idempotency-Key", key)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(BODY))
+                        .content(RegisterBodies.of(key)))
                 .andReturn().getResponse();
     }
 
