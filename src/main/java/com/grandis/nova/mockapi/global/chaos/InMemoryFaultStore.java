@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.global.chaos;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.stereotype.Component;
 
 /**
@@ -58,15 +59,22 @@ public class InMemoryFaultStore implements FaultHook {
     }
 
     /**
-     * 그 종류의 결함이 걸려 있으면 꺼내며 지운다. 값까지 맞춰 지우므로({@code remove(key, value)}) 동시에 꺼내도
-     * 한 쪽만 성공하고, 다른 종류의 결함은 소리 없이 사라지지 않는다.
+     * 그 종류의 결함이 걸려 있으면 꺼내며 지운다. 다른 종류의 결함은 그대로 둔다.
+     *
+     * <p>읽기와 지우기를 {@code computeIfPresent} 한 번으로 한다. {@code get} 뒤에 {@code remove(key, value)} 로 나누면
+     * 그 틈에 같은 종류 · 같은 대기 시간으로 다시 건 결함까지 지운다 — {@link Fault} 가 record 라 값이 같으면 같은 결함으로
+     * 보기 때문이다. 한 번에 하면 동시에 꺼내도 한 쪽만 받고, 꺼낸 뒤에 새로 건 결함은 남는다.
      */
     private Fault take(String externalKey, FaultType type) {
-        Fault fault = faults.get(externalKey);
-        if (fault == null || fault.type() != type) {
+        AtomicReference<Fault> taken = new AtomicReference<>();
+        faults.computeIfPresent(externalKey, (key, fault) -> {
+            if (fault.type() != type) {
+                return fault;
+            }
+            taken.set(fault);
             return null;
-        }
-        return faults.remove(externalKey, fault) ? fault : null;
+        });
+        return taken.get();
     }
 
     /** 시험용 — 결함이 아직 걸려 있는가. 꺼내기와 기다리기의 순서를 볼 때 쓴다. */
