@@ -1,5 +1,5 @@
 -- 외부 예약 Mock 스키마
--- 기준: ERD v5 (스마트폰 사전예약 + 최소 일반 판매 · 2026-09-17) 의 external_mock 영역
+-- 기준: ERD (2026-10-06 갱신) 의 external_mock 영역. v5(2026-09-17)와 같다
 -- 이 파일이 스키마의 정본이다. Hibernate 가 테이블을 만들지 않게 ddl-auto 는 validate 로 둔다.
 
 CREATE DATABASE IF NOT EXISTS external_mock
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS preorder_registrations
     -- 같은 키 재등록의 내용 비교 대상 세 칸.
     customer_id     BIGINT                           NULL COMMENT '우리 customers.id',
     product_id      BIGINT                           NULL COMMENT '우리 products.id',
-    sku             VARCHAR(80) COLLATE utf8mb4_bin  NULL COMMENT '우리 product_variants.sku',
+    sku             VARCHAR(80) COLLATE utf8mb4_bin  NULL COMMENT '우리 product_options.sku',
     status          VARCHAR(20)                      NOT NULL COMMENT 'ACTIVE / CANCELED',
     confirmed_at    DATETIME(6)                      NULL COMMENT '등록을 확정한 시각',
     canceled_at     DATETIME(6)                      NULL COMMENT '취소 표식을 남긴 시각',

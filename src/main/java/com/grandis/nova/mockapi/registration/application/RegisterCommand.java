@@ -8,7 +8,7 @@ package com.grandis.nova.mockapi.registration.application;
  *
  * @param customerId 우리 customers.id
  * @param productId  우리 products.id
- * @param sku        우리 product_variants.sku
+ * @param sku        우리 product_options.sku
  */
 public record RegisterCommand(Long customerId, Long productId, String sku) {
 }

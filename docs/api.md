@@ -6,7 +6,7 @@
 | 버전 / 작성일 | 5.10 / 2026-10-02 (결함에 느린 성공 — `SLOW_SUCCESS` · `delayMs`) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 8개 |
-| 기준 | ERD v5 (`스마트폰 사전예약 + 최소 일반 판매 ERD · v5 · 2026-09-17`, dbdiagram) |
+| 기준 | ERD (2026-10-06 갱신, dbdiagram). `external_mock` 영역은 v5(2026-09-17)와 같고, 상품 옵션 표 이름이 `product_variants` → `product_options` 로 바뀌었다 |
 
 **이 문서가 Mock API 계약의 정본이다.** 계약을 바꾸려면 이 파일을 고치는 PR 로 하고, 구현과 다르면 둘 중 하나가 버그다.
 
@@ -187,7 +187,7 @@ ERD `external_mock.preorder_registrations` 와 1:1 이다.
 | `externalNumber` | string | `external_number` (UNIQUE) | Mock 이 최초 등록에서 발급. 등록 전 취소 표식이면 `null` |
 | `customerId` | integer | `customer_id` | 우리 `customers.id`. 물리 FK 없음 |
 | `productId` | integer | `product_id` | 우리 `products.id` |
-| `sku` | string | `sku` | 우리 `product_variants.sku` |
+| `sku` | string | `sku` | 우리 `product_options.sku` |
 | `status` | string | `status` | `ACTIVE` / `CANCELED` |
 | `confirmedAt` | datetime | `confirmed_at` | 등록을 확정한 시각 |
 | `canceledAt` | datetime | `canceled_at` | 취소 표식을 남긴 시각 |
@@ -256,7 +256,7 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 | --- | --- | --- | --- |
 | `customerId` | integer | 필수 | 우리 `customers.id` |
 | `productId` | integer | 필수 | 우리 `products.id` |
-| `sku` | string | 필수 | 우리 `product_variants.sku`. `maxLength=80` |
+| `sku` | string | 필수 | 우리 `product_options.sku`. `maxLength=80` |
 
 ```json
 {
