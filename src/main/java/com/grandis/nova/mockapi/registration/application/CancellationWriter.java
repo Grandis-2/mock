@@ -73,7 +73,7 @@ public class CancellationWriter {
                 : repository.findByExternalNumber(externalNumber).isPresent();
         if (mismatch) {
             throw new MockException(ErrorCode.INVALID_REQUEST,
-                    "externalKey 와 externalNumber 가 서로 다른 등록을 가리킵니다.");
+                    "externalKey 와 reservationNo 가 서로 다른 등록을 가리킵니다.");
         }
     }
 }
