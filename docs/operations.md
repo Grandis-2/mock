@@ -109,20 +109,21 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 
 ### 2-1. 결과 불명 만들기 — 커밋 전(`TIMEOUT`) · 커밋 후(결함) · 늦은 커밋(느린 성공)
 
-결과 불명은 워커가 응답을 받지 못한 것이다. 만드는 방법이 둘이고, **워커 눈에는 똑같이 "응답 없음" 인데
-DB 는 정반대다.** 이 대조가 멱등 키와 `by-key` 조회가 필요한 이유다.
+결과 불명은 워커가 응답을 받지 못한 것이다. 만드는 방법이 셋이고, **워커 눈에는 똑같이 "응답 없음" 인데
+DB 는 서로 다르다** — 없음 · 있음 · 나중에 생김. 이 대조가 멱등 키와 `by-key` 조회가 필요한 이유다.
 
-| | `TIMEOUT` | 결함 |
-| --- | --- | --- |
-| 거는 법 | 실패율 + `failureMode: TIMEOUT` | `POST /external/faults` 로 키 하나 |
-| 발동 | 주사위에 걸린 요청 | 그 키의 새 등록 한 번 |
-| 시점 | **커밋 전** | **커밋 후** |
-| 워커가 보는 것 | 응답 없음 | 응답 없음 |
-| DB | **없음** | **있음** |
-| 같은 키 재요청 | 새 등록 (`Replay: false`) | 재생 (`Replay: true`) |
+| | `TIMEOUT` | 결함 (응답 유실) | 결함 (느린 성공) |
+| --- | --- | --- | --- |
+| 거는 법 | 실패율 + `failureMode: TIMEOUT` | `POST /external/faults` 로 키 하나 | `POST /external/faults` 로 키 하나 · `SLOW_SUCCESS` · `delayMs` |
+| 발동 | 주사위에 걸린 요청 | 그 키의 새 등록 한 번 | 그 키의 등록 한 번 (실패 판정 통과) |
+| 시점 | **커밋 전** | **커밋 후** | **커밋 전 대기** 뒤 정상 처리 |
+| 워커가 보는 것 | 응답 없음 | 응답 없음 | 응답 없음 |
+| DB | **없음** | **있음** | 포기 시점엔 **없음** → **나중에 생김** |
+| 같은 키 재요청 | 새 등록 (`Replay: false`) | 재생 (`Replay: true`) | **먼저 커밋** (`Replay: false`) — 늦게 깬 원래 요청이 재생 쪽 |
 
-둘 다 `mock.timeout-hold-ms`(기본 7000ms) 동안 헤더도 보내지 않고 붙잡았다가 **본문 없는 500 으로
-끝낸다.** 워커(읽기 타임아웃 5초)가 먼저 포기해야 결과 불명이 된다.
+`TIMEOUT` · 응답 유실은 `mock.timeout-hold-ms`(기본 7000ms) 동안 헤더도 보내지 않고 붙잡았다가 **본문 없는 500 으로
+끝낸다.** 워커(읽기 타임아웃 5초)가 먼저 포기해야 결과 불명이 된다. 느린 성공은 붙잡는 것이 아니라 `delayMs` 만큼
+기다린 뒤 **정상 처리**한다 — 워커가 포기한 뒤라 그 응답은 아무도 받지 않는다.
 
 > 유지 시간이 워커 읽기 타임아웃 + 2초보다 **짧으면** 워커가 타임아웃 대신 빈 500 을 받아 "일시 실패" 로
 > 처리한다. 재현하려던 상황이 아니다. 그래서 그렇게 설정하면 Mock 이 뜨지 않는다(0장).
@@ -191,7 +192,10 @@ curl -i localhost:8081/external/reservations/by-key/demo-lost-1
 키 조회를 해도 아직 행이 없어 **404** 인데, 그 뒤에 커밋된다. 같은 키 재시도 · 포기 전 취소 표식이 제대로 막는지
 키 하나로 보여 준다. 기다리는 동안은 잠금 전이라 다른 요청이 끼어들 수 있다(api.md 결함 절).
 
-**결함은 아직 등록하지 않은 키에 건다.** 이미 등록 · 취소된 키에 걸어도 기다리긴 하지만 늦은 커밋은 생기지 않는다.
+- **결함은 아직 등록하지 않은 키에 건다.** 이미 등록 · 취소된 키에 걸어도 기다리긴 하지만 늦은 커밋은 생기지 않는다
+- **대기는 15초로 건다.** 원래 요청은 지연(약 0.5초) + 15초 뒤에 깨어난다. 워커가 5초에 포기한 뒤 재시도 · 취소를
+  **손으로 쳐도 10초 가까이 여유**가 있다. 6초처럼 짧게 걸면 여유가 1초 남짓이라, 손으로 치는 사이에 원래 요청이
+  먼저 커밋해 결과가 뒤집힌다(① 재시도가 재생을 받고, ② 는 등록이 생긴 뒤에 취소된다)
 
 **① 기다리는 동안 같은 키로 재시도 → 행 하나**
 
@@ -200,7 +204,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
   -d '{"registerLatencyMs":500,"failureRate":0.0}'
 
 curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' \
-  -d '{"externalKey":"demo-slow-1","faultType":"SLOW_SUCCESS","delayMs":6000}'
+  -d '{"externalKey":"demo-slow-1","faultType":"SLOW_SUCCESS","delayMs":15000}'
 
 # 워커처럼 5초에 포기한다
 curl --max-time 5 -X POST localhost:8081/external/reservations \
@@ -213,25 +217,29 @@ curl -i -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-1' -H 'Content-Type: application/json' \
   -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'         # 재시도
 
-curl -i localhost:8081/external/reservations/by-key/demo-slow-1          # 몇 초 뒤
+# 원래 요청이 깨어날 때까지(처음 등록부터 약 16초) 기다린 뒤
+curl -i localhost:8081/external/reservations/by-key/demo-slow-1
 ```
 
-| 단계 | 결과 (2026-10-06) |
+| 단계 (처음 등록부터) | 결과 (2026-10-06 · 단계마다 2초 쉬며 실행) |
 | --- | --- |
-| 원래 요청 | 응답 없음 — `--max-time 5` 로 5.0초에 포기 |
-| 포기 직후 키 조회 | **404** `NOT_FOUND` — 원래 요청은 아직 기다리는 중이라 행이 없다 |
-| 같은 키 재시도 | **201** · `X-Idempotent-Replay: false` · `X-Mock-Injected-Latency-Ms: 603` — 결함은 이미 꺼내져 재시도는 기다리지 않고 **먼저 커밋**한다 |
-| 원래 요청의 대기가 끝난 뒤 키 조회 | **200** · `ACTIVE` · 등록 **하나**, 재시도가 받은 번호 그대로. 늦게 깨어난 원래 요청은 그 등록을 재생했다 |
+| 원래 요청 | 응답 없음 — `--max-time 5` 로 **5.2초**에 포기 |
+| 키 조회 (7.3초) | **404** `NOT_FOUND` — 원래 요청은 아직 기다리는 중이라 행이 없다 |
+| 같은 키 재시도 (9.6초) | **201** · `X-Idempotent-Replay: false` · `X-Mock-Injected-Latency-Ms: 501` — 결함은 이미 꺼내져 재시도는 기다리지 않고 **먼저 커밋**한다 |
+| 원래 요청이 깬 뒤 키 조회 (22초) | **200** · `ACTIVE` · 등록 **하나**, 재시도가 받은 번호 그대로. 늦게 깬 원래 요청은 그 등록을 재생했다 |
 | DB | 행 하나 · 번호 하나 |
 
 **② 기다리는 동안 포기하며 같은 키로 취소 → 등록 없음**
 
 ```bash
-curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' \
-  -d '{"externalKey":"demo-slow-2","faultType":"SLOW_SUCCESS","delayMs":6000}'
+curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
+  -d '{"registerLatencyMs":500,"failureRate":0.0}'
 
-# 원래 요청 — 결과를 보려고 10초 기다린다(워커라면 5초에 포기). 다른 터미널에서 보내거나 & 로 뒤에 둔다
-curl --max-time 10 -X POST localhost:8081/external/reservations \
+curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' \
+  -d '{"externalKey":"demo-slow-2","faultType":"SLOW_SUCCESS","delayMs":15000}'
+
+# 원래 요청 — 결과를 보려고 20초 기다린다(워커라면 5초에 포기). 다른 터미널에서 보내거나 & 로 뒤에 둔다
+curl --max-time 20 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-2' -H 'Content-Type: application/json' \
   -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}' &
 
@@ -240,17 +248,20 @@ curl -i localhost:8081/external/reservations/by-key/demo-slow-2          # 404
 
 curl -i -X POST localhost:8081/external/cancellations -H 'Content-Type: application/json' \
   -d '{"externalKey":"demo-slow-2","reason":"RETRY_EXHAUSTED"}'           # 포기하며 취소
+
+wait                                                                      # 원래 요청이 끝날 때까지
+curl -i localhost:8081/external/reservations/by-key/demo-slow-2
 ```
 
-| 단계 | 결과 (2026-10-06) |
+| 단계 (처음 등록부터) | 결과 (2026-10-06 · 단계마다 2초 쉬며 실행) |
 | --- | --- |
-| 5초 시점 키 조회 | **404** — 아직 행이 없다 |
-| 같은 키로 취소 | **200** · `hadActiveRegistration: false` · `cancelMarkerAt` 있음 — 등록 전이라 **취소 표식**만 남긴다 |
-| 원래 요청이 끝내 받은 응답 | **409** `KEY_CANCELED` — 깨어났지만 표식에 막혀 저장하지 않았다 |
+| 키 조회 (7.2초) | **404** — 아직 행이 없다 |
+| 같은 키로 취소 (9.4초) | **200** · `hadActiveRegistration: false` · `cancelMarkerAt` 있음 — 등록 전이라 **취소 표식**만 남긴다 |
+| 원래 요청이 끝내 받은 응답 (15.6초) | **409** `KEY_CANCELED` — 깨어났지만 표식에 막혀 저장하지 않았다 |
 | 그 뒤 키 조회 | **200** · `registrations: []` · `cancelMarkerAt` 있음 |
 | DB | `CANCELED` · 번호 `null` — **외부에 등록이 생기지 않았다** |
 
-포기할 때 취소를 보내지 않으면 원래 요청이 6초 뒤에 커밋되어, 우리는 실패로 안내했는데 외부에는 등록이 생긴다.
+포기할 때 취소를 보내지 않으면 원래 요청이 15초 뒤에 커밋되어, 우리는 실패로 안내했는데 외부에는 등록이 생긴다.
 그래서 워커는 재시도를 그만둘 때 **같은 키로 먼저 취소**한다(api.md 오류 분류 계약 「결과 불명」).
 
 ### 2-2. 처리 중 강제 종료 · 재기동 — 확인함 (2026-09-27)
@@ -495,7 +506,7 @@ docker exec nova-mock-mysql mysql -unova -pnova -N \
 | 2 | 멱등 재생 | 같은 키 재요청 → 같은 번호 + 재생 헤더 | 절차 확인함 |
 | 3 | 같은 키 다른 내용 | 422 `KEY_PAYLOAD_MISMATCH` → 기존 등록 그대로 | 절차 확인함 |
 | 4 | 일시 실패와 재시도 | 실패율 1.0 → 500 → 키 조회 404 → 0.0 → 즉시 성공 | 절차 확인함 |
-| 5 | **결과 불명 재현 — 두 가지** | `TIMEOUT` → 응답 없음 → 키 조회 404 · 재요청 새 등록 / 결함 → 응답 없음 → 키 조회 200 · 재요청 재생 | 절차 확인함 (2-1) |
+| 5 | **결과 불명 재현 — 세 가지** | `TIMEOUT` → 응답 없음 → 키 조회 404 · 재요청 새 등록 / 응답 유실 → 응답 없음 → 키 조회 200 · 재요청 재생 / **느린 성공** → 응답 없음 → 키 조회 404 · 재요청이 먼저 커밋(원래 요청은 늦게 재생) · 포기하며 취소하면 원래 요청 409 | 절차 확인함 (2-1) |
 | 6 | **커밋 직후 중단·재기동** | 결함이 붙잡은 창에서 강제 종료 → DB 확인 → 재기동 → 재생 | 절차 확인함 (2-3) |
 | 7 | **재기동 후 설정 재입력** | 6번 뒤 `configVersion` 0 확인 → 프리셋 다시 넣기 | 필수 |
 | 8 | 부하 | 10초 5,000건 → 5분류 집계 → DB 대조 | 판정 통과 ([load-test.md](load-test.md)) |
