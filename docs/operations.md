@@ -139,7 +139,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 
 curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-timeout-1' -H 'Content-Type: application/json' \
-  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'
+  -d '{"ourReservationId":"demo-timeout-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 
 curl -i localhost:8081/external/reservations/by-key/demo-timeout-1
 ```
@@ -170,7 +170,7 @@ curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' 
 
 curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-lost-1' -H 'Content-Type: application/json' \
-  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'
+  -d '{"ourReservationId":"demo-lost-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 
 curl -i localhost:8081/external/reservations/by-key/demo-lost-1
 ```
@@ -209,13 +209,13 @@ curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' 
 # 워커처럼 5초에 포기한다
 curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-1' -H 'Content-Type: application/json' \
-  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'
+  -d '{"ourReservationId":"demo-slow-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 
 curl -i localhost:8081/external/reservations/by-key/demo-slow-1          # 404
 
 curl -i -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-1' -H 'Content-Type: application/json' \
-  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'         # 재시도
+  -d '{"ourReservationId":"demo-slow-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'         # 재시도
 
 # 원래 요청이 깨어날 때까지(처음 등록부터 약 16초) 기다린 뒤
 curl -i localhost:8081/external/reservations/by-key/demo-slow-1
@@ -241,7 +241,7 @@ curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' 
 # 원래 요청 — 결과를 보려고 20초 기다린다(워커라면 5초에 포기). 다른 터미널에서 보내거나 & 로 뒤에 둔다
 curl --max-time 20 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-2' -H 'Content-Type: application/json' \
-  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}' &
+  -d '{"ourReservationId":"demo-slow-2","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}' &
 
 sleep 5
 curl -i localhost:8081/external/reservations/by-key/demo-slow-2          # 404
@@ -532,7 +532,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 ```bash
 curl -i -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-1' -H 'Content-Type: application/json' \
-  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'
+  -d '{"ourReservationId":"demo-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 ```
 
 **2. 멱등 재생** — 1번과 **똑같은 요청**을 한 번 더 보낸다. 이어서 키로 조회한다.
@@ -541,7 +541,7 @@ curl -i -X POST localhost:8081/external/reservations \
 curl localhost:8081/external/reservations/by-key/demo-1
 ```
 
-**3. 같은 키 다른 내용** — 키는 그대로 두고 `sku` 만 `SM-G999-512-BLK` 로 바꿔 보낸다. 이어서 1번에서 받은
+**3. 같은 키 다른 내용** — 키는 그대로 두고 `optionCode` 만 `SM-G999-512-BLK` 로 바꿔 보낸다. 이어서 1번에서 받은
 번호로 조회해 기존 등록이 그대로인지 본다.
 
 ```bash
@@ -556,7 +556,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
   -d '{"registerLatencyMs":500,"failureRate":1.0}'
 curl -i -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-2' -H 'Content-Type: application/json' \
-  -d '{"customerId":1002,"productId":12,"sku":"SM-G999-256-BLK"}'
+  -d '{"ourReservationId":"demo-2","customerRef":"1002","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 curl -i localhost:8081/external/reservations/by-key/demo-2
 curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
   -d '{"registerLatencyMs":500,"failureRate":0.0}'
@@ -569,7 +569,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | --- | --- | --- |
 | 1 | 201 · 번호 발급 | **201** · `X-Idempotent-Replay: false` · `R-20260929-8855269550` · `ACTIVE` · 0.75초. DB 1행 |
 | 2 | 같은 번호 · 재생 헤더 | **201** · `X-Idempotent-Replay: true` · **같은 번호 · 같은 `confirmedAt`** · 0.57초. 키 조회 `storedOutcome: SUCCESS`. DB 여전히 1행 |
-| 3 | 422 · 기존 등록 보존 | **422 `KEY_PAYLOAD_MISMATCH`** · "sku 이(가) 다릅니다" · `externalNumber` 에 기존 번호. 번호 조회의 `sku` 는 `256-BLK` 그대로 |
+| 3 | 422 · 기존 등록 보존 | **422 `KEY_PAYLOAD_MISMATCH`** · "optionCode 이(가) 다릅니다" · `externalNumber` 에 기존 번호. 번호 조회의 `optionCode` 는 `256-BLK` 그대로 |
 | 4 | 실패는 저장되지 않는다 | **500 `UPSTREAM_UNAVAILABLE`**(`replayable: false`) → 키 조회 **404** → 0.0 으로 내리고 재시도 **201 · `X-Idempotent-Replay: false`** · 새 번호. DB 2행 |
 
 **말로 짚을 것**

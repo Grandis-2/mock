@@ -22,7 +22,7 @@ docker compose up -d mysql       # external_mock database (로컬 전용, 포트
 ```bash
 curl -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f' -H 'Content-Type: application/json' \
-  -d '{"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}'
+  -d '{"ourReservationId":"9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 curl localhost:8081/external/reservations/by-key/9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
   -d '{"registerLatencyMs":2000,"failureRate":0.5,"failureMode":"HTTP_5XX"}'
