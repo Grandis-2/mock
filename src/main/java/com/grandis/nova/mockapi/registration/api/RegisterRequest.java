@@ -13,7 +13,7 @@ import jakarta.validation.constraints.Size;
  *
  * @param customerId 우리 customers.id
  * @param productId  우리 products.id
- * @param sku        우리 product_variants.sku
+ * @param sku        우리 product_options.sku
  */
 public record RegisterRequest(
 
