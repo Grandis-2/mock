@@ -129,12 +129,13 @@ class RegistrationApiTest {
                 .andExpect(header().string("X-Mock-Config-Version", String.valueOf(version)))
                 .andExpect(jsonPath("$.externalKey").value(key))
                 .andExpect(jsonPath("$.externalNumber", matchesPattern("R-\\d{8}-\\d{10}")))
-                // 신청 내용은 요청과 같은 이름 · 같은 값(문자열 그대로)으로 돌려준다
-                .andExpect(jsonPath("$.customerRef").value("1001"))
-                .andExpect(jsonPath("$.itemCode").value("12"))
-                .andExpect(jsonPath("$.optionCode").value("SM-G999-256-BLK"))
-                .andExpect(jsonPath("$.qty").value(1))
-                .andExpect(jsonPath("$.scope").value("preorder"))
+                // 응답은 원장(ERD) 이름이다. 요청의 customerRef · itemCode 문자열은 숫자로 바뀌어 있다
+                .andExpect(jsonPath("$.customerId").value(1001))
+                .andExpect(jsonPath("$.productId").value(12))
+                .andExpect(jsonPath("$.sku").value("SM-G999-256-BLK"))
+                // qty · scope 는 저장하지 않으므로 응답에도 없다
+                .andExpect(jsonPath("$.qty").doesNotExist())
+                .andExpect(jsonPath("$.scope").doesNotExist())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.confirmedAt",
                         matchesPattern("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z")))
@@ -170,7 +171,7 @@ class RegistrationApiTest {
                 .andExpect(jsonPath("$.externalNumber").value(number));
 
         assertThat(repository.findById(key)).get()
-                .satisfies(saved -> assertThat(saved.optionCode()).isEqualTo("SM-G999-256-BLK"));
+                .satisfies(saved -> assertThat(saved.sku()).isEqualTo("SM-G999-256-BLK"));
     }
 
     @Test
@@ -183,16 +184,66 @@ class RegistrationApiTest {
                 .andExpect(jsonPath("$.errorMessage", containsString("customerRef, optionCode 이(가) 다릅니다.")));
     }
 
-    /** 문자열 그대로 비교한다. 숫자로 바꿔 비교하면 {@code "1001"} 과 {@code "01001"} 이 같은 신청이 된다. */
+    /**
+     * 원장 칸이 숫자라 참조 · 코드는 숫자로 바꿔 넣는다. 앞에 0 이 붙은 값을 받아 바꾸면 {@code "1001"} 과 조용히 같은
+     * 신청이 되므로, 바꾸지 않고 400 으로 막는다(같은 키 · 다른 내용의 422 가 아니다). 숫자가 아닌 값 · {@code long}
+     * 범위를 넘을 수 있는 19자리도 같다. 어느 경우도 원장에 남지 않는다.
+     */
     @Test
-    @DisplayName("참조는 글자 그대로 비교한다 - 앞에 0 이 붙으면 다른 신청이다")
-    void referencesAreComparedAsText() throws Exception {
+    @DisplayName("참조 · 코드는 0 으로 시작하지 않는 1~18자리 숫자만 - 앞에 0 · 숫자 아님 · 19자리는 400")
+    void referencesMustBeCanonicalNumbers() throws Exception {
         String key = newKey();
-        register(key);
+        for (String ref : new String[]{"01001", "0", "C-1001", "1001 ", "-1", "1".repeat(19), ""}) {
+            register(key, RegisterBodies.of(key, ref, RegisterBodies.OPTION_CODE))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.errorMessage")
+                            .value("customerRef 은(는) 0 으로 시작하지 않는 1~18자리 숫자여야 합니다."));
+        }
+        register(key, RegisterBodies.of(key).replace("\"itemCode\":\"12\"", "\"itemCode\":\"012\""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorMessage")
+                        .value("itemCode 은(는) 0 으로 시작하지 않는 1~18자리 숫자여야 합니다."));
+        assertThat(repository.findById(key)).isEmpty();
 
-        register(key, RegisterBodies.of(key, "01001", RegisterBodies.OPTION_CODE))
-                .andExpect(status().isUnprocessableContent())
-                .andExpect(jsonPath("$.errorMessage", containsString("customerRef 이(가) 다릅니다.")));
+        // 18자리 최댓값은 받는다
+        String max = newKey();
+        register(max, RegisterBodies.of(max, "9".repeat(18), RegisterBodies.OPTION_CODE))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.customerId").value(999_999_999_999_999_999L));
+    }
+
+    /** 사전예약은 수량 1 고정이다. 1 이 아니면 같은 키 · 다른 내용(422)이 아니라 잘못된 요청(400)이다. */
+    @Test
+    @DisplayName("qty 가 1 이 아니면 400 - 처음 등록이든 같은 키 재요청이든")
+    void quantityMustBeOne() throws Exception {
+        String key = newKey();
+        for (String qty : new String[]{"0", "2", "-1"}) {
+            register(key, RegisterBodies.of(key).replace("\"qty\":1", "\"qty\":" + qty))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorMessage").value("qty 은(는) 1 이어야 합니다."));
+        }
+        assertThat(repository.findById(key)).isEmpty();
+
+        register(key).andExpect(status().isCreated());
+        register(key, RegisterBodies.of(key).replace("\"qty\":1", "\"qty\":2"))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * {@code scope} 는 저장 · 비교하지 않는다(ERD 에 칸 없음). 그래서 같은 키로 {@code scope} 만 달라도 같은 신청으로
+     * 보고 재생한다. 본 서비스는 접수 때 본문을 고정하므로 정상 흐름에서는 생기지 않는다(명세 「내용 비교」).
+     */
+    @Test
+    @DisplayName("같은 키로 scope 만 다르면 재생한다 - scope 는 비교 대상이 아니다")
+    void scopeIsNotCompared() throws Exception {
+        String key = newKey();
+        String number = bodyOf(register(key)).get("externalNumber").asString();
+
+        register(key, RegisterBodies.of(key).replace("\"scope\":\"preorder\"", "\"scope\":\"other\""))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("X-Idempotent-Replay", "true"))
+                .andExpect(jsonPath("$.externalNumber").value(number));
     }
 
     @Test
@@ -290,11 +341,10 @@ class RegistrationApiTest {
     @DisplayName("이미 있는 키로 새 등록을 저장하면 덮어쓰지 않고 중복 키로 떨어진다")
     void newRegistrationNeverOverwrites() {
         String key = newKey();
-        repository.saveAndFlush(Registration.active(
-                key, "R-19990101-1000000001", "1", "1", "A", 1, "preorder", Instant.now()));
+        repository.saveAndFlush(Registration.active(key, "R-19990101-1000000001", 1L, 1L, "A", Instant.now()));
 
-        assertThatThrownBy(() -> repository.saveAndFlush(Registration.active(
-                key, "R-19990101-1000000002", "2", "2", "B", 1, "preorder", Instant.now())))
+        assertThatThrownBy(() -> repository.saveAndFlush(
+                Registration.active(key, "R-19990101-1000000002", 2L, 2L, "B", Instant.now())))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .satisfies(e -> assertThat(DuplicateKey.isCause(e)).isTrue());
 
@@ -427,10 +477,6 @@ class RegistrationApiTest {
         register(key, RegisterBodies.of(key, RegisterBodies.CUSTOMER_REF, "S".repeat(81)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage").value("optionCode 은(는) 80자 이하여야 합니다."));
-
-        register(key, RegisterBodies.of(key).replace("\"qty\":1", "\"qty\":0"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage").value("qty 은(는) 1 이상이어야 합니다."));
 
         // 타입을 바꿔 받지 않는다. 받으면 워커의 타입 오류가 Mock 에서는 묻힌다
         register(key, RegisterBodies.of(key).replace("\"customerRef\":\"1001\"", "\"customerRef\":1001"))

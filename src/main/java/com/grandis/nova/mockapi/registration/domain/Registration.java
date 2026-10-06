@@ -40,25 +40,14 @@ public class Registration implements Persistable<String> {
     @Column(name = "external_number", length = 100)
     private String externalNumber;
 
-    /*
-     * 신청 내용 다섯 칸. 이름은 본 서비스(preorder)의 등록 요청 본문과 같다.
-     * 참조 · 코드는 숫자로 바꾸지 않고 받은 문자열 그대로 둔다 — 형식은 본 서비스가 정한다.
-     */
+    @Column(name = "customer_id")
+    private Long customerId;
 
-    @Column(name = "customer_ref", length = 100)
-    private String customerRef;
+    @Column(name = "product_id")
+    private Long productId;
 
-    @Column(name = "item_code", length = 100)
-    private String itemCode;
-
-    @Column(name = "option_code", length = 80)
-    private String optionCode;
-
-    @Column(name = "qty")
-    private Integer qty;
-
-    @Column(name = "scope", length = 50)
-    private String scope;
+    @Column(name = "sku", length = 80)
+    private String sku;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 20, nullable = false)
@@ -86,32 +75,29 @@ public class Registration implements Persistable<String> {
     protected Registration() {
     }
 
-    private Registration(String externalKey, String externalNumber, String customerRef, String itemCode,
-                         String optionCode, Integer qty, String scope, RegistrationStatus status,
+    private Registration(String externalKey, String externalNumber, Long customerId, Long productId,
+                         String sku, RegistrationStatus status,
                          Instant confirmedAt, Instant canceledAt) {
         this.externalKey = externalKey;
         this.externalNumber = externalNumber;
-        this.customerRef = customerRef;
-        this.itemCode = itemCode;
-        this.optionCode = optionCode;
-        this.qty = qty;
-        this.scope = scope;
+        this.customerId = customerId;
+        this.productId = productId;
+        this.sku = sku;
         this.status = status;
         this.confirmedAt = confirmedAt;
         this.canceledAt = canceledAt;
     }
 
     /** 등록 성공 행. */
-    public static Registration active(String externalKey, String externalNumber, String customerRef,
-                                      String itemCode, String optionCode, int qty, String scope,
-                                      Instant confirmedAt) {
-        return new Registration(externalKey, externalNumber, customerRef, itemCode, optionCode, qty, scope,
+    public static Registration active(String externalKey, String externalNumber, Long customerId,
+                                      Long productId, String sku, Instant confirmedAt) {
+        return new Registration(externalKey, externalNumber, customerId, productId, sku,
                 RegistrationStatus.ACTIVE, confirmedAt, null);
     }
 
     /** 등록 전 취소로 남기는 표식 행. 번호가 없다. */
     public static Registration cancelMarker(String externalKey, Instant canceledAt) {
-        return new Registration(externalKey, null, null, null, null, null, null,
+        return new Registration(externalKey, null, null, null, null,
                 RegistrationStatus.CANCELED, null, canceledAt);
     }
 
@@ -142,26 +128,20 @@ public class Registration implements Persistable<String> {
     /**
      * 같은 키의 재요청과 저장된 내용이 다른 칸. 비어 있으면 같은 신청이다.
      *
-     * <p>저장된 다섯 칸을 직접 비교한다. 해시로 비교하면 어느 칸이 달라 거절됐는지 알려줄 수 없다.
-     * 이름은 응답 메시지에 그대로 쓰이므로 API 필드 이름이다.
+     * <p>저장된 세 칸을 직접 비교한다. 해시로 비교하면 어느 칸이 달라 거절됐는지 알려줄 수 없다.
+     * 이름은 거절 메시지에 그대로 쓰이므로 <b>요청 필드 이름</b>이다(customerRef · itemCode · optionCode).
+     * 보낸 쪽이 자기 본문에서 찾을 수 있어야 한다 — 원장 칸 이름으로 알려 주면 그런 필드는 보낸 적이 없다.
      */
-    public List<String> differingFields(String customerRef, String itemCode, String optionCode, int qty,
-                                        String scope) {
-        List<String> fields = new ArrayList<>(5);
-        if (!Objects.equals(this.customerRef, customerRef)) {
+    public List<String> differingFields(Long customerId, Long productId, String sku) {
+        List<String> fields = new ArrayList<>(3);
+        if (!Objects.equals(this.customerId, customerId)) {
             fields.add("customerRef");
         }
-        if (!Objects.equals(this.itemCode, itemCode)) {
+        if (!Objects.equals(this.productId, productId)) {
             fields.add("itemCode");
         }
-        if (!Objects.equals(this.optionCode, optionCode)) {
+        if (!Objects.equals(this.sku, sku)) {
             fields.add("optionCode");
-        }
-        if (!Objects.equals(this.qty, qty)) {
-            fields.add("qty");
-        }
-        if (!Objects.equals(this.scope, scope)) {
-            fields.add("scope");
         }
         return fields;
     }
@@ -183,24 +163,16 @@ public class Registration implements Persistable<String> {
         return externalNumber;
     }
 
-    public String customerRef() {
-        return customerRef;
+    public Long customerId() {
+        return customerId;
     }
 
-    public String itemCode() {
-        return itemCode;
+    public Long productId() {
+        return productId;
     }
 
-    public String optionCode() {
-        return optionCode;
-    }
-
-    public Integer qty() {
-        return qty;
-    }
-
-    public String scope() {
-        return scope;
+    public String sku() {
+        return sku;
     }
 
     public RegistrationStatus status() {

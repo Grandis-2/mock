@@ -7,7 +7,7 @@ package com.grandis.nova.mockapi.registration.domain;
  */
 public enum RegistrationStatus {
 
-    /** 등록돼 살아 있다. 번호 · 신청 내용 다섯 칸 · 확정 시각이 모두 채워져 있어야 한다. */
+    /** 등록돼 살아 있다. 번호·회원·상품·sku·확정 시각이 모두 채워져 있어야 한다. */
     ACTIVE,
 
     /**

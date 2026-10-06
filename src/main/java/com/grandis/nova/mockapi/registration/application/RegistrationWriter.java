@@ -52,7 +52,7 @@ public class RegistrationWriter {
         Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
         Registration created = Registration.active(
                 key, numbers.next(now),
-                command.customerRef(), command.itemCode(), command.optionCode(), command.qty(), command.scope(),
+                command.customerId(), command.productId(), command.sku(),
                 now);
         // 여기서 INSERT 를 내보낸다. 중복 키가 커밋 시점이 아니라 이 줄에서 나야 원인이 분명하다.
         repository.saveAndFlush(created);
@@ -68,7 +68,7 @@ public class RegistrationWriter {
 
         // 5. 같은 신청이면 저장된 결과를 재생하고, 아니면 기존 등록을 건드리지 않고 거절한다.
         List<String> differing = registration.differingFields(
-                command.customerRef(), command.itemCode(), command.optionCode(), command.qty(), command.scope());
+                command.customerId(), command.productId(), command.sku());
         if (!differing.isEmpty()) {
             throw new MockException(ErrorCode.KEY_PAYLOAD_MISMATCH,
                     "같은 키로 다른 내용이 요청되었습니다. " + String.join(", ", differing) + " 이(가) 다릅니다.",

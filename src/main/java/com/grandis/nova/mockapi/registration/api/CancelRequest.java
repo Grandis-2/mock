@@ -9,7 +9,7 @@ package com.grandis.nova.mockapi.registration.api;
  *
  * @param externalKey   우리 {@code preorder_token}
  * @param reservationNo Mock 이 발급한 예약번호(응답의 {@code externalNumber}). 등록이 확인되지 않았으면 null
- * @param reason        {@code USER_CANCEL} · {@code ADMIN_CANCEL} · {@code DEADLINE_EXCEEDED} 등. <b>저장하지 않는다</b>(ERD 에 칸 없음).
+ * @param reason        {@code USER_CANCEL} · {@code ADMIN_CANCEL} · {@code DEADLINE_EXCEEDED} · {@code GHOST_COMPENSATION} 등. <b>저장하지 않는다</b>(ERD 에 칸 없음).
  *                      그래도 명세의 필드라 선언한다 — 빠뜨리면 모르는 필드로 400 이 된다(StrictJsonConfig).
  *                      값 목록이 열려 있어("등") 열거형으로 막지 않는다
  */
