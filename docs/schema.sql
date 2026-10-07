@@ -1,5 +1,6 @@
 -- 외부 예약 Mock 스키마
--- 기준: ERD v14.1 (2026-10-06) 의 external_mock 영역. 칸 · 제약은 v5(2026-09-17)와 같다
+-- 기준: ERD v14.1 (2026-10-06) 의 external_mock 영역. 칸 · 제약은 v5(2026-09-17)와 같고,
+-- customer_id · product_id 만 be 의 id UUID 전환(NV-326)을 따라 BINARY(16) 이다(ERD 는 BIGINT).
 -- 등록 요청 본문은 본 서비스(preorder) 형식이고, 이 표에는 ERD 칸으로 바꿔 넣는다(docs/api.md 「내용 비교」).
 -- 이 파일이 스키마의 정본이다. Hibernate 가 테이블을 만들지 않게 ddl-auto 는 validate 로 둔다.
 
@@ -19,8 +20,9 @@ CREATE TABLE IF NOT EXISTS preorder_registrations
     -- Mock 이 최초 등록에서 발급한다. 등록 전 취소 표식이면 NULL.
     external_number VARCHAR(100) COLLATE utf8mb4_bin NULL COMMENT '외부 예약번호',
     -- 같은 키 재등록의 내용 비교 대상 세 칸. 요청의 customerRef · itemCode · optionCode 를 바꿔 넣는다.
-    customer_id     BIGINT                           NULL COMMENT '우리 customers.id',
-    product_id      BIGINT                           NULL COMMENT '우리 products.id',
+    -- id 두 칸은 UUID 16바이트로, 순서는 UUID_TO_BIN(u) 와 같다. 사람이 읽을 때는 BIN_TO_UUID(customer_id).
+    customer_id     BINARY(16)                       NULL COMMENT '우리 customers.id (UUID)',
+    product_id      BINARY(16)                       NULL COMMENT '우리 products.id (UUID)',
     sku             VARCHAR(80) COLLATE utf8mb4_bin  NULL COMMENT '우리 product_options.sku',
     status          VARCHAR(20)                      NOT NULL COMMENT 'ACTIVE / CANCELED',
     confirmed_at    DATETIME(6)                      NULL COMMENT '등록을 확정한 시각',

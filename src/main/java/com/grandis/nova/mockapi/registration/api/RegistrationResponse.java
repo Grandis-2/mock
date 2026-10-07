@@ -3,6 +3,7 @@ package com.grandis.nova.mockapi.registration.api;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationStatus;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 등록 한 건. 등록 응답 · 번호 조회 응답 · 목록 조회의 한 건이 같은 형식이다.
@@ -13,8 +14,8 @@ import java.time.Instant;
 public record RegistrationResponse(
         String externalKey,
         String externalNumber,
-        Long customerId,
-        Long productId,
+        UUID customerId,
+        UUID productId,
         String sku,
         RegistrationStatus status,
         Instant confirmedAt,

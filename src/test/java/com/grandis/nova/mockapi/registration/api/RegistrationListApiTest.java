@@ -136,8 +136,8 @@ class RegistrationListApiTest {
                 .andExpect(jsonPath("$.items.length()").value(3))
                 .andExpect(jsonPath("$.items[0].externalKey").value(prefix + "a"))
                 .andExpect(jsonPath("$.items[0].status").value("ACTIVE"))
-                .andExpect(jsonPath("$.items[0].customerId").value(Integer.parseInt(RegisterBodies.CUSTOMER_REF)))
-                .andExpect(jsonPath("$.items[0].productId").value(Integer.parseInt(RegisterBodies.ITEM_CODE)))
+                .andExpect(jsonPath("$.items[0].customerId").value(RegisterBodies.CUSTOMER_REF))
+                .andExpect(jsonPath("$.items[0].productId").value(RegisterBodies.ITEM_CODE))
                 .andExpect(jsonPath("$.items[0].sku").value(RegisterBodies.OPTION_CODE))
                 .andExpect(jsonPath("$.items[1].externalKey").value(prefix + "b"))
                 .andExpect(jsonPath("$.items[1].status").value("CANCELED"))
@@ -193,11 +193,11 @@ class RegistrationListApiTest {
                 .andExpect(header().doesNotExist(DefaultFailureInjector.INJECTED_FAILURE_HEADER));
     }
 
-    /** 모르는 이름을 조용히 버리면 productId=12 로 거른 줄 알고 전체를 받는다. */
+    /** 모르는 이름을 조용히 버리면 productId 로 거른 줄 알고 전체를 받는다. */
     @Test
     @DisplayName("모르는 쿼리 파라미터 - 400")
     void unknownParam() throws Exception {
-        list("productId", "12")
+        list("productId", RegisterBodies.ITEM_CODE)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errorMessage")

@@ -15,6 +15,7 @@ import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import java.time.Instant;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -94,7 +95,7 @@ class ResetApiTest {
 
     /** 번호는 UNIQUE 라 키로 만들어 겹치지 않게 한다. 형식은 이 시험과 무관하다. */
     private void saveActive(String key) {
-        repository.save(Registration.active(key, "R-" + key, 1001L, 12L,
+        repository.save(Registration.active(key, "R-" + key, UUID.randomUUID(), UUID.randomUUID(),
                 "SM-G999-256-BLK", Instant.now()));
     }
 

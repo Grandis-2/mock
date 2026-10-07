@@ -75,7 +75,7 @@ public class RegistrationController {
      * 취소 표식 행을 모두 준다.
      *
      * <p>쿼리 파라미터도 본문처럼 엄격하게 받는다. 모르는 이름 · 같은 이름 두 번 · 빈 값 · 숫자가 아닌 {@code size} 는
-     * 400 이다. 모르는 이름을 조용히 버리면 {@code productId=12} 로 거른 줄 알고 전체를 받는다. 그래서
+     * 400 이다. 모르는 이름을 조용히 버리면 {@code productId=…} 로 거른 줄 알고 전체를 받는다. 그래서
      * {@code @RequestParam} 의 바꿔 넣기(빈 값 → null, 두 값 중 하나)에 맡기지 않고 요청에서 직접 읽는다.
      */
     @GetMapping
