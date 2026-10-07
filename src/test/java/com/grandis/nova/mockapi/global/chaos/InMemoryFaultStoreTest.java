@@ -51,7 +51,13 @@ class InMemoryFaultStoreTest {
         assertThat(output).doesNotContain("결함 발동");
 
         store.consumeResponseLost(KEY);
-        assertThat(output).contains("결함 발동 RESPONSE_LOST_AFTER_COMMIT key=" + KEY + " delayMs=0");
+        assertThat(output).contains("결함 발동 RESPONSE_LOST_AFTER_COMMIT key=" + KEY);
+        // 기다리는 시간은 느린 성공에만 있다. 응답 유실에 delayMs=0 을 찍으면 "0ms 기다렸다" 로 읽힌다
+        assertThat(output).doesNotContain("delayMs");
+
+        store.inject(OTHER_KEY, FaultType.SLOW_SUCCESS, 1);
+        store.holdBeforeCommit(OTHER_KEY);
+        assertThat(output).contains("결함 발동 SLOW_SUCCESS key=" + OTHER_KEY + " delayMs=1");
     }
 
     @Test

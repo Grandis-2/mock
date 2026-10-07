@@ -81,7 +81,12 @@ public class InMemoryFaultStore implements FaultHook {
         Fault fault = taken.get();
         if (fault != null) {
             // 실패 주입 로그(DefaultFailureInjector)와 같은 모양이다. be 로그와 키로 맞대 본다.
-            log.info("결함 발동 {} key={} delayMs={}", fault.type(), externalKey, fault.delayMs());
+            // 기다리는 시간은 느린 성공에만 있다 — 응답 유실에 delayMs=0 을 찍으면 "0ms 기다렸다" 로 읽힌다
+            if (fault.type() == FaultType.SLOW_SUCCESS) {
+                log.info("결함 발동 {} key={} delayMs={}", fault.type(), externalKey, fault.delayMs());
+            } else {
+                log.info("결함 발동 {} key={}", fault.type(), externalKey);
+            }
         }
         return fault;
     }
