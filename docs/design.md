@@ -102,7 +102,7 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 | 쓰는 것 | 언제 | 약속 |
 | --- | --- | --- |
 | `ConfigProvider.snapshot()` | 1단계 전 | 이 시도가 끝까지 쓸 설정을 얼려 준다. 버전은 `X-Mock-Config-Version` 으로 나간다 |
-| `FailureInjector.apply(snapshot)` | 1~2단계 | **트랜잭션 밖**에서 부른다. 실패는 `MockException`, `TIMEOUT` 은 응답 없이 끝난다 |
+| `FailureInjector.apply(snapshot)` | 1~2단계 | **트랜잭션 밖**에서 부른다. 실패는 `MockException`, `TIMEOUT` 은 응답 없이 끝난다. `MIXED` 의 본문 없는 500 · HTML 502~504 는 응답을 직접 쓰고 `InjectedResponseException` 으로 멈춘다 — 등록 쪽은 잡지 않는다(`ResponseLostAdvice` 가 삼킨다) |
 | `FaultHook.holdBeforeCommit(key)` | 2단계 뒤 · 3단계 전 | **트랜잭션 밖 · 키 행 잠금 전**에 부른다(지연 주입 뒤, 중복 키 재시도 앞). 느린 성공 결함이 걸린 키면 **결함을 먼저 꺼내고** 정한 시간 기다린 뒤 돌아온다 — 그사이 같은 키 재시도는 기다리지 않는다. 기다린 시간은 `X-Mock-Injected-Latency-Ms` 에 더한다. 중단되면 500(저장 없음) |
 | `FaultHook.consumeResponseLost(key)` | 7단계 | **새로 커밋한 직후에만** 부른다. true 면 결함을 소비한 것이다 |
 | `ConnectionDropper.drop(reason)` | 7단계 | 응답 없이 연결을 붙잡다 끝낸다. **정상 반환하지 않는다** — 항상 `ResponseLostException` |
@@ -112,6 +112,9 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 `X-Mock-Injected-Latency-Ms` 응답 헤더는 **`FailureInjector.apply` 가 대기 직전에 직접 붙인다**(`RequestContextHolder`).
 등록 쪽 코드에는 이 헤더가 보이지 않지만, 위 시그니처를 바꾸지 않으려고 고른 방식이다. 1단계라 원장을 보기 전이므로
 그 뒤 결과가 무엇이든(201 · 재생 · 409 · 422 · 500) 같이 나간다(api.md 등록 Response).
+
+주입 표식 헤더 `X-Mock-Injected-Failure` 와 실패 주입 로그(`실패 주입 HTTP_503 key=…`)도 같은 방식이다. 키가 계약에 없어
+`apply` 가 지금 요청의 `Idempotency-Key` 헤더에서 읽는다 — 등록 입구가 형식을 이미 확인한 뒤다.
 
 ## 스키마
 
