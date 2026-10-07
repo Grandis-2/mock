@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.grandis.nova.mockapi.global.chaos.DefaultFailureInjector;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
@@ -145,7 +147,9 @@ class RegistrationListApiTest {
                 // 값이 없어도 필드를 생략하지 않는다
                 .andExpect(jsonPath("$.items[2].externalNumber").value(nullValue()))
                 .andExpect(jsonPath("$.items[2].customerId").value(nullValue()))
-                .andExpect(jsonPath("$.items[2].sku").value(nullValue()));
+                .andExpect(jsonPath("$.items[2].productId").value(nullValue()))
+                .andExpect(jsonPath("$.items[2].sku").value(nullValue()))
+                .andExpect(jsonPath("$.items[2].confirmedAt").value(nullValue()));
 
         JsonNode item = bodyOf(list("cursor", prefix, "size", "1")).get("items").get(0);
         JsonNode byNumber = bodyOf(mvc.perform(get(PATH + "/{externalNumber}", item.get("externalNumber").asString())));
@@ -171,13 +175,22 @@ class RegistrationListApiTest {
         assertThat(page.get("items").size()).isBetween(1, 500);
     }
 
-    /** 정합성 검사가 Mock 결과를 확인하려고 부르는 길이라, 실패율을 올린 상태에서도 막히면 안 된다. */
+    /**
+     * 정합성 검사가 Mock 결과를 확인하려고 부르는 길이라, 지연 · 실패를 올린 상태에서도 막히면 안 된다.
+     *
+     * <p>지연이 걸렸는지는 시간으로 재지 않고 주입 헤더로 본다. 지연 · 실패 주입은 실제로 뽑은 지연을
+     * {@code X-Mock-Injected-Latency-Ms} 에, 주입한 실패를 {@code X-Mock-Injected-Failure} 에 남기므로 그 길을 탔다면 헤더가 붙는다.
+     * 실패 모드는 응답을 직접 쓰는 {@code MIXED} 로 둔다 — 그 길을 탔다면 200 이 나올 수 없다.
+     */
     @Test
-    @DisplayName("지연 · 실패 설정을 적용하지 않는다 - 실패율 100% 에서도 200")
-    void noFailureInjection() throws Exception {
-        store.update(0, 1.0, FailureMode.HTTP_5XX);
+    @DisplayName("지연 · 실패 설정을 적용하지 않는다 - 지연 2초 · 실패율 100% · MIXED 에서도 200, 주입 헤더 없음")
+    void noLatencyOrFailureInjection() throws Exception {
+        store.update(2000, 1.0, FailureMode.MIXED);
 
-        list("size", "1").andExpect(status().isOk());
+        list("size", "1")
+                .andExpect(status().isOk())
+                .andExpect(header().doesNotExist(DefaultFailureInjector.INJECTED_LATENCY_HEADER))
+                .andExpect(header().doesNotExist(DefaultFailureInjector.INJECTED_FAILURE_HEADER));
     }
 
     /** 모르는 이름을 조용히 버리면 productId=12 로 거른 줄 알고 전체를 받는다. */
