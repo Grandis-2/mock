@@ -8,6 +8,9 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -20,6 +23,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  * 나지 않고 시험이 조용히 잘못된 것을 증명하게 되는 종류다 — 결함이 두 번 발동하면 재시도마저
  * 응답을 잃어 "재생 확인" 이 영원히 안 되고, 키가 섞이면 결함을 걸지 않은 요청이 응답을 잃는다.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class InMemoryFaultStoreTest {
 
     private static final String KEY = "test-lost-1";
@@ -36,6 +40,18 @@ class InMemoryFaultStoreTest {
     @DisplayName("걸지 않은 키는 발동하지 않는다")
     void notInjected() {
         assertThat(store.consumeResponseLost(KEY)).isFalse();
+    }
+
+    /** be 로그와 키로 맞대 보려고 남긴다. 발동하지 않은 조회(다른 키 · 다른 종류)는 남기지 않는다. */
+    @Test
+    @DisplayName("결함이 발동하면 종류 · 키를 로그로 남긴다")
+    void firedFaultIsLogged(CapturedOutput output) {
+        store.inject(KEY, FaultType.RESPONSE_LOST_AFTER_COMMIT);
+        store.consumeResponseLost(OTHER_KEY);
+        assertThat(output).doesNotContain("결함 발동");
+
+        store.consumeResponseLost(KEY);
+        assertThat(output).contains("결함 발동 RESPONSE_LOST_AFTER_COMMIT key=" + KEY + " delayMs=0");
     }
 
     @Test

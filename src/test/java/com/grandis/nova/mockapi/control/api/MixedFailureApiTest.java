@@ -22,8 +22,11 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -38,6 +41,7 @@ import org.springframework.test.web.servlet.ResultActions;
  */
 @SpringBootTest(properties = "mock.timeout-hold-ms=0")
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension.class)
 class MixedFailureApiTest {
 
     private static final String CONFIG = "/external/config";
@@ -187,6 +191,25 @@ class MixedFailureApiTest {
         register(newKey())
                 .andExpect(status().isCreated())
                 .andExpect(header().doesNotExist(MARK));
+    }
+
+    /** be 로그와 키로 맞대 보려고 남긴다. 실패하지 않은 요청은 남기지 않는다. */
+    @Test
+    @DisplayName("주입한 실패는 종류 · 키 · 모드 · 설정 버전을 로그로 남긴다")
+    void injectedFailureIsLogged(CapturedOutput output) throws Exception {
+        mixedOnly("[\"HTTP_503\"]");
+        int version = store.snapshot().configVersion();
+        String key = newKey();
+
+        register(key).andExpect(status().isServiceUnavailable());
+
+        assertThat(output).contains("실패 주입 HTTP_503 key=" + key + " failureMode=MIXED configVersion=" + version);
+
+        configure("""
+                {"registerLatencyMs":0,"failureRate":0.0,"failureMode":"MIXED"}""");
+        String ok = newKey();
+        register(ok).andExpect(status().isCreated());
+        assertThat(output).doesNotContain("key=" + ok);
     }
 
     @Test

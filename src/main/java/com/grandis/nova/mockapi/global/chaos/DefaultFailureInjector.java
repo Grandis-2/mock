@@ -43,6 +43,9 @@ public class DefaultFailureInjector implements FailureInjector {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultFailureInjector.class);
 
+    /** 등록 요청의 멱등 키 헤더. 로그에 키를 남길 때 읽는다(등록 파트의 이름과 같다). */
+    private static final String IDEMPOTENCY_KEY = "Idempotency-Key";
+
     private final ConnectionDropper dropper;
     private final MockProperties properties;
 
@@ -61,15 +64,41 @@ public class DefaultFailureInjector implements FailureInjector {
 
         switch (snapshot.failureMode()) {
             // 워커는 이것을 "일시 실패" 로 읽고 그대로 재시도한다. 커밋 전이라 아무것도 저장되지 않는다.
-            case HTTP_5XX -> respond(MixedResponse.HTTP_500);
+            case HTTP_5XX -> respond(injected(MixedResponse.HTTP_500, snapshot));
             // 워커는 결과를 모른다(UNKNOWN). by-key 조회로 확인한 뒤에 재시도해야 한다.
             case TIMEOUT -> {
-                mark("TIMEOUT");
+                injected("TIMEOUT", snapshot);
                 dropper.drop("failureMode=TIMEOUT 주사위에 걸렸다");
             }
             // 설정한 종류 중 하나를 같은 확률로. 스냅샷이 MIXED 면 목록이 비어 있지 않다(ConfigSnapshot).
-            case MIXED -> respond(pick(snapshot.mixedResponses()));
+            case MIXED -> respond(injected(pick(snapshot.mixedResponses()), snapshot));
         }
+    }
+
+    private static MixedResponse injected(MixedResponse kind, ConfigSnapshot snapshot) {
+        injected(kind.name(), snapshot);
+        return kind;
+    }
+
+    /**
+     * 주입한 실패를 알린다 — 표식 헤더를 붙이고 키와 함께 로그로 남긴다.
+     *
+     * <p>로그는 be 로그와 맞대 보려고 남긴다. "Mock 이 이 키에 503 을 줬는데 워커가 어떻게 처리했나" 를 키로 찾는다.
+     * 키는 계약({@link FailureInjector#apply})에 없어 지금 요청의 헤더에서 읽는다 — 등록 입구가 형식을 이미 확인했다.
+     */
+    private static void injected(String kind, ConfigSnapshot snapshot) {
+        mark(kind);
+        log.info("실패 주입 {} key={} failureMode={} configVersion={}",
+                kind, currentKey(), snapshot.failureMode(), snapshot.configVersion());
+    }
+
+    /** 지금 요청의 멱등 키. 서블릿 요청 밖(단위 시험)이면 "-". */
+    private static String currentKey() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes servlet) {
+            String key = servlet.getRequest().getHeader(IDEMPOTENCY_KEY);
+            return key == null ? "-" : key;
+        }
+        return "-";
     }
 
     private static MixedResponse pick(List<MixedResponse> candidates) {
@@ -83,7 +112,6 @@ public class DefaultFailureInjector implements FailureInjector {
      * 형식이 아니라 직접 쓴다({@link InjectedResponseException}).
      */
     private static void respond(MixedResponse kind) {
-        mark(kind.name());
         if (kind == MixedResponse.HTTP_500) {
             throw new MockException(ErrorCode.UPSTREAM_UNAVAILABLE);
         }
