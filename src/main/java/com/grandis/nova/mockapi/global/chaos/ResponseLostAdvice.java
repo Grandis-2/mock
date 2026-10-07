@@ -8,9 +8,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * {@link ResponseLostException} 을 아무것도 쓰지 않고 삼킨다.
+ * 응답을 이미 직접 다룬 예외({@link ResponseLostException} · {@link InjectedResponseException})를 아무것도 쓰지 않고 삼킨다.
  *
- * <p>{@code GlobalExceptionHandler} 의 catch-all 이 먼저 잡으면 500 이 나가 UNKNOWN 이 아니라
+ * <p>{@code GlobalExceptionHandler} 의 catch-all 이 먼저 잡으면 JSON 500 이 나가 UNKNOWN 이 아니라
  * "일시 실패" 가 되어버린다. 그래서 우선순위를 가장 높게 둔다.
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -22,5 +22,10 @@ public class ResponseLostAdvice {
     @ExceptionHandler(ResponseLostException.class)
     public void handle(ResponseLostException e) {
         log.debug("응답을 보내지 않는다: {}", e.getMessage());
+    }
+
+    @ExceptionHandler(InjectedResponseException.class)
+    public void handle(InjectedResponseException e) {
+        log.debug("주입한 실패 응답을 이미 보냈다: {}", e.getMessage());
     }
 }

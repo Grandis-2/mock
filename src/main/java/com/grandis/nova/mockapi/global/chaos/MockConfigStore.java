@@ -3,6 +3,7 @@ package com.grandis.nova.mockapi.global.chaos;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.stereotype.Component;
 
@@ -59,15 +60,22 @@ public class MockConfigStore implements ConfigProvider {
      * @return 실제로 적용된 값. 요청값을 그대로 돌려주지 않는다
      */
     public Applied update(int registerLatencyMs, LatencyTail latencyTail, double failureRate,
-                          FailureMode failureMode) {
+                          FailureMode failureMode, List<MixedResponse> mixedResponses) {
         return current.updateAndGet(old -> new Applied(
                 new ConfigSnapshot(
                         registerLatencyMs,
                         failureRate,
                         failureMode,
                         old.snapshot().configVersion() + 1,
-                        latencyTail),
+                        latencyTail,
+                        mixedResponses),
                 now()));
+    }
+
+    /** 섞을 종류를 고르지 않고 바꾼다. MIXED 면 전부를 섞는다({@link ConfigSnapshot}). */
+    public Applied update(int registerLatencyMs, LatencyTail latencyTail, double failureRate,
+                          FailureMode failureMode) {
+        return update(registerLatencyMs, latencyTail, failureRate, failureMode, List.of());
     }
 
     /**

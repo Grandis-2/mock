@@ -94,6 +94,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | **결함 시험** | 500 | **0.0** | HTTP_5XX | 300 ~ 700ms |
 | 취소 경합 시험 | 10000 | 0.0 | HTTP_5XX | 6 ~ 14초 |
 | 타임아웃 부하 | 0 | 1.0 | **TIMEOUT** | 없음 |
+| 5xx 종류 섞기 | 500 | 0.05 | **MIXED** | 300 ~ 700ms |
 
 **취소 경합**은 지연 동안 취소를 끼워 넣는 시험이라 창이 넉넉해야 한다. 가장 짧게 뽑혀도 6초라
 손으로 취소를 보내기에 충분하다.
@@ -369,6 +370,41 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | ⑤ 초기화 다시 | — | 200 · `deletedCount: 1` (표식) |
 | ⑥ K 키 조회 | 200 · ACTIVE | **404** · DB 0행 |
 
+### 2-5. 5xx 종류별 응답 — `MIXED` (NV-312)
+
+실제 연동에서는 500 말고도 앞단 장비(로드 밸런서 · 게이트웨이)의 502 · 503 · 504 가 온다. 기본 `HTTP_5XX` 는 늘 같은
+500 이라, 워커가 다른 5xx 를 어떻게 처리 · 기록하는지는 볼 수 없다. `failureMode: MIXED` 면 실패에 걸린 요청마다
+아래 중 하나를 같은 확률로 보낸다. 모두 커밋 전이라 저장되지 않고 키 조회는 404 다.
+
+| 종류 | 응답 | 워커가 해야 할 일 |
+| --- | --- | --- |
+| `HTTP_500` | 500 + `errorCode: UPSTREAM_UNAVAILABLE` | 일시 실패 → 키 조회 → 같은 키 재시도 |
+| `HTTP_500_NO_BODY` | 본문 없는 500 | **결과 불명** → 키 조회 먼저 |
+| `HTTP_502` · `503` · `504` | 그 상태 + HTML 본문 (`errorCode` 없음) | **결과 불명** → 키 조회 먼저. 본문을 JSON 으로 읽다가 터지지 않아야 한다 |
+
+```bash
+# 다섯 종류를 섞는다 (실패율은 그대로 5%)
+curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
+  -d '{"registerLatencyMs":500,"failureRate":0.05,"failureMode":"MIXED"}'
+
+# 하나만 — 실패율 100% 에 503 만 (시연 · 확인용)
+curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
+  -d '{"registerLatencyMs":0,"failureRate":1.0,"failureMode":"MIXED","mixedResponses":["HTTP_503"]}'
+```
+
+**be 로그와 맞대 보기** — Mock 은 실패를 주입할 때마다 키와 종류를 로그로 남긴다. 같은 키를 be 로그에서 찾으면
+"Mock 이 503 을 줬는데 워커가 어떻게 처리했나" 를 바로 볼 수 있다. 결함도 같은 모양으로 남는다.
+
+```
+실패 주입 HTTP_503 key=9f1c2d3e-… failureMode=MIXED configVersion=3
+결함 발동 SLOW_SUCCESS key=demo-slow-1 delayMs=15000
+```
+
+응답에도 표식 헤더 `X-Mock-Injected-Failure: HTTP_503` 이 붙는다. 부하 판정이 주입 실패를 가르는 데 쓰는 **시험용**
+헤더라 실제 장비는 보내지 않는다 — **워커는 이 헤더로 분기하지 않는다.**
+
+되돌릴 때는 `failureMode` 를 빼고(기본 `HTTP_5XX`) 다시 `PUT` 한다. 재기동해도 기본값으로 돌아간다.
+
 ## 3. 부하 실행
 
 ```bash
@@ -381,7 +417,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 
 | | 값 |
 | --- | --- |
-| 시나리오 | `baseline` · `latency` · `timeout` · `tail` · `tail-over-timeout` (뒤의 둘은 지연 꼬리 — [load-test.md](load-test.md) "지연 꼬리 시나리오") |
+| 시나리오 | `baseline` · `latency` · `timeout` · `mixed` · `tail` · `tail-over-timeout` (`mixed` 는 baseline 에서 모드만 MIXED — 2-5. 뒤의 둘은 지연 꼬리 — [load-test.md](load-test.md) "지연 꼬리 시나리오") |
 | 패스 | `classify`(분류 판정 · 타임아웃 5초 = 워커 읽기 타임아웃) · `latency`(지연 판정 · 10초) |
 | 건수 | 생략하면 합의값 5,000 |
 | JDBC | 생략하면 `localhost:3307`. **부하를 쏘는 장비가 Mock 과 다르면 반드시 넣는다** |
@@ -425,6 +461,8 @@ JDBC 주소 끝의 `useLocalSessionState=true` 도 둔다(예시 파일에 있�
 | latency | `baseline` · `latency` · `tail` |
 
 `tail` · `tail-over-timeout` 조합(3개)은 NV-260 에서 더했다. 2026-10-01 의 15회 판정(앞 5개 조합)과 따로 센다.
+`mixed`(NV-312)는 판정 규칙이 `baseline` 과 같고 정식 판정 회차에는 넣지 않았다 — 주입 실패가 문구 없이 와도 판정이
+깨지지 않는지 보는 배선 확인용이다([load-test.md](load-test.md) "MIXED 시나리오").
 
 - **예열은 시나리오마다 2회 한다.** `baseline` 만 예열하고 `latency` 를 돌리면 첫 회차가 튄다 — 재기동
   직후 첫 `latency` 가 결과 불명 91.9% 였고, `latency` 를 따로 예열한 뒤에는 0% 였다. 커밋 동기화를 완화해도

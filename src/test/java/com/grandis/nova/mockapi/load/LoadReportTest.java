@@ -64,7 +64,6 @@ class LoadReportTest {
     // ---------------------------------------------------------------- 판정 (리뷰 H3 ③ ④ ⑤)
 
     private static final String URL = "http://localhost:8081";
-    private static final String INJECTED = LoadReport.INJECTED_FAILURE_MESSAGE;
     private static final LoadReport.Canary CANARY = new LoadReport.Canary("canary-1", "R-canary");
 
     /** 100건 · 실패율 5% 의 정상 실행 — 95건 접수(행 있음), 주입 5xx 5건(행 없음), 확인용 등록 1행. */
@@ -78,6 +77,49 @@ class LoadReportTest {
         Verdict verdict = report.judge(LoadPlan.classify(URL, 100), http5xx(0.05, rows));
 
         assertThat(verdict.result()).as(failures(verdict)).isEqualTo(Verdict.Result.PASS);
+    }
+
+    /**
+     * MIXED(NV-312) — 주입 5xx 가 본문 없는 500 · HTML 502~504 로 섞여 문구가 없다. 표식으로 주입을 가르므로 baseline 과
+     * 똑같이 PASS 이고, 실패율 판정에도 다섯 종류가 모두 들어간다. 예전처럼 문구로 갈랐다면 넷이 "주입이 아닌 5xx" 다.
+     */
+    @Test
+    @DisplayName("MIXED — 문구 없는 주입 5xx 도 표식으로 주입으로 센다. 판정은 HTTP_5XX 와 같다")
+    void mixedRunPasses() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        for (int i = 0; i < 95; i++) {
+            add(report, "a" + i, 500, 540);
+            rows.put("a" + i, "R-a" + i);
+        }
+        String[][] mixed = {{"500", "HTTP_500"}, {"500", "HTTP_500_NO_BODY"}, {"502", "HTTP_502"},
+                {"503", "HTTP_503"}, {"504", "HTTP_504"}};
+        for (int i = 0; i < mixed.length; i++) {
+            report.add(new LoadReport.Attempt("m" + i, null, Outcome.TRANSIENT_FAILURE, Integer.parseInt(mixed[i][0]),
+                    Duration.ofMillis(530), 500L, "주입 " + mixed[i][1], mixed[i][1]));
+        }
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), facts("MIXED", 0.05, rows));
+
+        assertThat(report.nonInjectedServerErrors()).isZero();
+        assertThat(verdict.result()).as(failures(verdict)).isEqualTo(Verdict.Result.PASS);
+        assertThat(verdict.checks()).anyMatch(check -> check.name().startsWith("5xx 가 실패율"));
+    }
+
+    /** 표식이 주입의 근거다. 문구가 주입 실패와 같아도 표식이 없으면 Mock 의 진짜 오류(대기 중 중단 등)로 센다. */
+    @Test
+    @DisplayName("표식 없는 5xx 는 문구가 주입과 같아도 주입이 아니다 — FAIL")
+    void unmarkedServerErrorIsNotInjected() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 95, 4);
+        report.add(new LoadReport.Attempt("unmarked", null, Outcome.TRANSIENT_FAILURE, 500,
+                Duration.ofMillis(510), 500L, "외부 시스템을 사용할 수 없습니다."));
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), http5xx(0.05, rows));
+
+        assertThat(report.nonInjectedServerErrors()).isEqualTo(1);
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
     }
 
     /** 앞 실행이 확인용 등록 직후에 멈췄고 초기화를 빠뜨렸다. 이번 확인용 키가 아니면 남의 행이다. */
@@ -312,12 +354,16 @@ class LoadReportTest {
         }
         for (int i = 0; i < injectedFailures; i++) {
             report.add(new LoadReport.Attempt("f" + i, null, Outcome.TRANSIENT_FAILURE, 500,
-                    Duration.ofMillis(530), 500L, INJECTED));
+                    Duration.ofMillis(530), 500L, "주입 HTTP_500", "HTTP_500"));
         }
     }
 
     private static LoadReport.Facts http5xx(double failureRate, Map<String, String> rows) {
-        return new LoadReport.Facts("HTTP_5XX", failureRate, new InjectedLatency(500, 0.4),
+        return facts("HTTP_5XX", failureRate, rows);
+    }
+
+    private static LoadReport.Facts facts(String failureMode, double failureRate, Map<String, String> rows) {
+        return new LoadReport.Facts(failureMode, failureRate, new InjectedLatency(500, 0.4),
                 Duration.ofMillis(20), snapshot(rows), null, CANARY);
     }
 

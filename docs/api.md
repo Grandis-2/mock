@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.14 / 2026-10-07 (원장 목록 조회 `GET /external/reservations` 추가 — 정합성 검사용. 5.12: 재시도를 다 써도 Mock 취소를 보내지 않음) |
+| 버전 / 작성일 | 5.14 / 2026-10-07 (원장 목록 조회 `GET /external/reservations` 추가 — 정합성 검사용. 5.13: 실패 모드 `MIXED`) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 9개 |
 | 기준 | 원장 · 응답은 ERD v14.1 (2026-10-06) 의 `external_mock` 영역 — 칸 · 제약은 v5(2026-09-17)와 같다. 요청 본문은 본 서비스(preorder)의 `RegisterRequestPayload` · `CancelRequestPayload` (be 결정, 2026-10-06) |
@@ -82,13 +82,15 @@ Mock 은 남의 회사 시스템을 연기한다. 우리 오류 포맷을 따르
 
 Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RESPONSE_LOST_AFTER_COMMIT` — 는 유지 시간(기본 7초) 동안 아무것도 보내지 않다가 본문 없는 500 으로 끝난다. 유지 시간을 워커 읽기 타임아웃(5초)보다 2초 길게 두므로 워커에는 타임아웃으로 보인다. 본문 없는 500 을 받았더라도 같게 처리한다.
 
+`errorCode` 없는 응답을 워커가 직접 받아 보려면 `failureMode=MIXED` 를 쓴다(설정 변경 절). 실패에 걸린 요청에 본문 없는 500 · 앞단 장비 흉내의 HTML 502 · 503 · 504 를 바로 보낸다. 모두 커밋 전이라 키 조회는 404 다.
+
 | 순서 | 워커가 하는 일 |
 | --- | --- |
 | 1 | 새 키를 만들지 않는다 |
 | 2 | 키 조회로 확인한다. ACTIVE 면 그 번호로 확정, 취소 표식이면 정리, 404 면 **같은 키로** 다시 등록 |
 | 3 | 재시도를 다 써도(DEAD_LETTER) Mock 취소를 보내지 않는다. 같은 키로 취소하는 것은 예약을 취소로 끝낼 때뿐이다(키 조회 절 「본 서비스의 판단」) |
 
-500 은 주입 실패 말고도 중복 키 재시도 상한 초과 · 처리하지 못한 오류에서 같은 코드로 난다. 워커에게는 모두 일시 실패이고 저장 여부는 위처럼 확인한다. 부하 시험 집계에서는 `errorMessage` 로 구분한다.
+500 은 주입 실패 말고도 중복 키 재시도 상한 초과 · 처리하지 못한 오류에서 같은 코드로 난다. 워커에게는 모두 일시 실패이고 저장 여부는 위처럼 확인한다. 부하 시험 집계에서는 주입 표식 헤더 `X-Mock-Injected-Failure`(등록 Response 절)로 주입 실패를 가르고, 나머지는 `errorMessage` 로 원인을 본다.
 
 | 500 의 원인 | `errorMessage` |
 | --- | --- |
@@ -111,7 +113,7 @@ Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RE
 | 틀린 것 | `errorMessage` 예 |
 | --- | --- |
 | 계약에 없는 필드 | `customerId 은(는) 알 수 없는 필드입니다. 받을 수 있는 필드: ourReservationId, customerRef, itemCode, optionCode, qty, scope` |
-| enum 값 | `failureMode 은(는) HTTP_5XX, TIMEOUT 중 하나여야 합니다. 받은 값: HTTP_429` |
+| enum 값 | `failureMode 은(는) HTTP_5XX, TIMEOUT, MIXED 중 하나여야 합니다. 받은 값: HTTP_429` · 목록이면 위치까지 — `mixedResponses[1] 은(는) …` |
 | 필수 값 누락 | `optionCode 은(는) 필수입니다.` |
 | 타입이 다른 값 | `customerRef 값의 형식이 올바르지 않습니다.` |
 | 같은 필드 두 번 | `customerRef 필드가 두 번 왔습니다.` |
@@ -216,6 +218,8 @@ ERD v14.1 `external_mock.preorder_registrations` 와 1:1 이다. 응답 · 조�
 | **결함 시험** | **500** | **0.0** |
 | **취소 경합 시험** | **10000** | **0.0** |
 
+실패의 **모양**은 실패율과 따로 `failureMode` 로 고른다. 기본 `HTTP_5XX` 는 언제나 500 + `errorCode` 이고, `MIXED` 는 걸릴 때마다 500 · 본문 없는 500 · HTML 502~504 중 하나다(설정 변경 절). 워커의 5xx 처리 · 로그를 종류별로 볼 때 `MIXED` 를 쓴다.
+
 결함 주입 시나리오(`RESPONSE_LOST_AFTER_COMMIT`)를 확인할 때는 **실패율을 0 으로 내린다.** 지연·실패 판정이 결함 발동보다 앞서므로, 기본 5% 로 두면 재시도가 결함에 닿기 전에 일시 실패로 끝날 수 있다.
 
 "등록이 오가는 중에 취소가 끼어드는" 상황은 **지연을 크게 잡아** 만든다. 등록 요청이 지연 구간에서 기다리는 동안 취소를 보내면 된다. 지연은 락 밖이라 그 사이 취소가 표식을 남길 수 있다.
@@ -309,9 +313,11 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 
 **201 Created**
 
-응답 헤더 `X-Idempotent-Replay`(boolean) · `X-Mock-Config-Version`(integer) · `X-Mock-Injected-Latency-Ms`(integer)
+응답 헤더 `X-Idempotent-Replay`(boolean) · `X-Mock-Config-Version`(integer) · `X-Mock-Injected-Latency-Ms`(integer) · 주입한 실패에만 `X-Mock-Injected-Failure`(string)
 
 `X-Mock-Injected-Latency-Ms` 는 이 요청에 **실제로 뽑힌 지연**(ms)이다. 지연이 0 이어도 `0` 을 싣는다. 지연 주입이 원장을 보기 **전**(처리 순서 1단계)이라 201 · 재생만이 아니라 **409 · 422 · 주입 실패의 500 · 주입이 아닌 500(교착 · 재시도 상한 등)에도 실린다.** 요청 형식이 틀린 400 은 주입 전에 거절되므로 없다. 부하 판정이 요청마다 `관측 − 이 값` 으로 오버헤드를 구하는 데 쓴다 — 지연을 흔들면 관측 백분위에서 주입 백분위를 빼는 것은 오버헤드의 백분위가 아니다. 워커는 쓰지 않는다.
+
+`X-Mock-Injected-Failure` 는 **실패 판정으로 일부러 낸 실패에만** 붙는 시험용 표식이다. 값은 그 종류다 — `HTTP_500` · `HTTP_500_NO_BODY` · `HTTP_502` · `HTTP_503` · `HTTP_504` · `TIMEOUT`(`failureMode=HTTP_5XX` 의 500 도 `HTTP_500`). 본문 없는 500 · HTML 에는 Mock 의 문구가 없어서, 부하 판정이 주입 실패와 Mock 의 진짜 오류(교착 등)를 이 헤더로 가른다. 같은 키 · 종류가 Mock 로그(`실패 주입 HTTP_503 key=…`)에도 남아 be 로그와 맞대 볼 수 있다. **실제 앞단 장비는 이 헤더를 보내지 않으므로 워커는 이 헤더로 분기하지 않는다** — 상태와 `errorCode` 유무로 분기한다.
 
 ```json
 {
@@ -333,7 +339,20 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 | 400 | `INVALID_REQUEST` | 필수 값 누락 · 계약에 없는 필드 · 키 길이 · `ourReservationId` ≠ 헤더 키 · 참조가 숫자 형식이 아님 · `qty` ≠ 1 |
 | 409 | `KEY_CANCELED` | 취소 표식이 있는 키 |
 | **422** | **`KEY_PAYLOAD_MISMATCH`** | **같은 키로 다른 `customerRef`·`itemCode`·`optionCode`** (`scope` 는 비교하지 않음) |
-| 500 | `UPSTREAM_UNAVAILABLE` | `failureMode=HTTP_5XX` 의 주입 실패. 커밋 전 |
+| 500 | `UPSTREAM_UNAVAILABLE` | `failureMode=HTTP_5XX` 의 주입 실패(MIXED 의 `HTTP_500` 도 같다). 커밋 전 |
+| 500 | — (본문 없음) | `failureMode=MIXED` 의 `HTTP_500_NO_BODY`. 커밋 전. 워커에게는 결과 불명 |
+| 502 · 503 · 504 | — (HTML 본문) | `failureMode=MIXED` 의 앞단 장비 흉내. `Content-Type: text/html` · `Accept` 와 상관없이 HTML. 커밋 전. 워커에게는 결과 불명 |
+
+MIXED 의 HTML 본문은 대표 모양이다(장비마다 문구가 달라 정답이 없다). 워커는 문구가 아니라 상태와 `errorCode` 유무로 분기해야 한다.
+
+```html
+<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+</body>
+</html>
+```
 
 ```json
 {
@@ -765,6 +784,7 @@ Accept: application/json
   "bodyLatencyMs": 500,
   "failureRate": 0.05,
   "failureMode": "HTTP_5XX",
+  "mixedResponses": [],
   "configVersion": 4,
   "appliedAt": "2026-09-16T09:40:00.000Z",
   "timeoutHoldMs": 7000,
@@ -778,6 +798,7 @@ Accept: application/json
 | `latencyJitter` | 지연을 흔드는 폭. 실제 대기는 `평균 × (1 ∓ 이 값)` 균등분포. **조회만 되고 변경은 안 된다** — 설정 파일로 정한다 |
 | `latencyTailRate` · `latencyTailMinMs` · `latencyTailMaxMs` | 지연의 느린 꼬리. 요청마다 이 비율로 [최소, 최대] 균등에서 뽑는다. 비율 0 이면 꼬리 없음(구간도 0) |
 | `bodyLatencyMs` | 꼬리에 걸리지 않은 요청의 평균. 전체 평균이 `registerLatencyMs` 가 되도록 꼬리만큼 낮춘 값(반올림)이고, 지터는 여기에만 걸린다. **조회만 된다** |
+| `mixedResponses` | `failureMode=MIXED` 에서 섞는 실패 응답 종류. MIXED 가 아니면 빈 목록, MIXED 인데 고르지 않았으면 다섯 전부 |
 | `configVersion` · `appliedAt` | 설정을 바꿀 때마다 오르는 버전과 그 시각 |
 | `timeoutHoldMs` · `workerReadTimeoutMs` | 유지 시간과 워커 읽기 타임아웃(설정 절). **조회만 되고 변경은 안 된다** — 설정 파일로 정한다. 부하 보고서가 어떤 조건의 Mock 이었는지 남기는 데 쓴다 |
 
@@ -820,7 +841,8 @@ Accept: application/json
 | --- | --- | --- | --- |
 | `registerLatencyMs` | integer | 필수 | 지연의 **평균**. `default=500` · `min=0` · `max=60000` |
 | `failureRate` | number | 필수 | `default=0.05` · `min=0` · `max=1` |
-| `failureMode` | string | 선택 | `HTTP_5XX`(기본) / `TIMEOUT` |
+| `failureMode` | string | 선택 | `HTTP_5XX`(기본) / `TIMEOUT` / `MIXED` |
+| `mixedResponses` | string[] | 선택 · **MIXED 일 때만** | 섞을 종류. `HTTP_500` · `HTTP_500_NO_BODY` · `HTTP_502` · `HTTP_503` · `HTTP_504` 중에서. 생략하면 다섯 전부 |
 | `latencyTailRate` | number | 선택(꼬리 묶음) | 꼬리에 걸릴 확률. `min=0` · **1 미만** |
 | `latencyTailMinMs` | integer | 선택(꼬리 묶음) | 꼬리 구간 하한. `min=0` · `max=60000` · 최대 이하 |
 | `latencyTailMaxMs` | integer | 선택(꼬리 묶음) | 꼬리 구간 상한(포함). `min=0` · `max=60000` |
@@ -860,7 +882,35 @@ Accept: application/json
 }
 ```
 
-`failureMode` 2종 — `HTTP_5XX` 즉시 500 · `TIMEOUT` 응답하지 않은 채 연결을 **유지 시간** 동안 붙잡았다가 본문 없는 500 으로 끝낸다. 유지 시간이 워커 읽기 타임아웃보다 길어 워커에는 타임아웃으로 보인다(결과 불명). 둘 다 커밋 전 일시 실패다.
+`failureMode` 3종 — 실패할지는 `failureRate`(확률)가 정하고, 걸린 뒤의 모양을 이 값이 정한다. 셋 다 커밋 전이라 저장되지 않는다.
+
+| 모드 | 실패에 걸리면 | 워커가 보는 것 |
+| --- | --- | --- |
+| `HTTP_5XX` (기본) | 즉시 500 + `UPSTREAM_UNAVAILABLE` | 일시 실패 |
+| `TIMEOUT` | 응답하지 않은 채 연결을 **유지 시간** 동안 붙잡았다가 본문 없는 500 으로 끝낸다. 유지 시간이 워커 읽기 타임아웃보다 길어 워커에는 타임아웃으로 보인다 | 결과 불명 |
+| `MIXED` | `mixedResponses` 중 하나를 같은 확률로 — 아래 표 | 종류에 따라 |
+
+**MIXED** — 워커의 5xx 처리 · 로그를 종류별로 볼 때 쓴다. 실제 연동에서는 500 말고도 앞단 장비의 502 · 503 · 504 가 오는데, 워커가 갈라야 하는 것은 상태 번호가 아니라 **`errorCode` 유무**다(오류 분류 계약).
+
+| `mixedResponses` 값 | 응답 | 워커가 보는 것 |
+| --- | --- | --- |
+| `HTTP_500` | 500 + JSON `errorCode: UPSTREAM_UNAVAILABLE` (`HTTP_5XX` 와 같다) | 일시 실패 |
+| `HTTP_500_NO_BODY` | 본문 없는 500 | 결과 불명 |
+| `HTTP_502` · `HTTP_503` · `HTTP_504` | 그 상태 + HTML 본문, `errorCode` 없음. `Accept` 와 상관없이 HTML | 결과 불명 |
+
+- 생략하면 다섯 전부, 하나만 주면 그 응답만 나온다 — 시연에서 "지금 503 을 보여 준다" 가 된다.
+- `TIMEOUT` 은 섞지 않는다. 연결을 붙잡아 무겁고, 따로 고를 수 있다.
+- 429 는 아직 없다. "5xx 인데 저장된" 경우도 만들지 않는다 — 커밋 전에 보내므로 키 조회는 늘 404 다.
+- 주입한 실패에는 표식 헤더 `X-Mock-Injected-Failure` 가 붙는다(등록 Response 절). 워커는 이 헤더로 분기하지 않는다.
+
+```json
+{
+  "registerLatencyMs": 500,
+  "failureRate": 0.05,
+  "failureMode": "MIXED",
+  "mixedResponses": ["HTTP_502", "HTTP_503", "HTTP_504"]
+}
+```
 
 유지 시간은 Mock 설정 `mock.timeout-hold-ms` 이고 **기본값 7000ms** 다. 본 서비스 워커의 HTTP 읽기 타임아웃 **5초**(be `worker` 의 `external.mock.read-timeout`)에 2초를 더한 값이다. 워커 타임아웃을 바꾸면 이 값도 함께 바꾼다.
 
@@ -875,7 +925,7 @@ Accept: application/json
 
 ### 시스템 처리
 
-1. 값의 범위와 꼬리 묶음 규칙(위 "지연 꼬리")을 검사하고 어긋나면 400. 설정을 건드리지 않는다.
+1. 값의 범위 · 꼬리 묶음 규칙(위 "지연 꼬리") · 섞기 규칙(위 "MIXED")을 검사하고 어긋나면 400. 설정을 건드리지 않는다.
 2. 설정을 바꾸고 `configVersion` 을 1 증가시킨다.
 3. `appliedAt` 을 기록한다.
 4. 진행 중인 등록 시도는 시작 시점 버전을 유지하고, 변경은 이후 시도부터 적용한다.
@@ -890,6 +940,7 @@ Accept: application/json
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
 | 400 | `INVALID_REQUEST` | 범위 밖 값 · 꼬리 칸 일부만 · 꼬리 최소 > 최대 · 꼬리만으로 평균을 넘음 |
+| 400 | `INVALID_REQUEST` | `mixedResponses` — MIXED 가 아닌데 보냄(조용히 버리면 섞이고 있다고 믿는다) · 빈 목록 · 같은 값 두 번 · 모르는 값(`mixedResponses[1] 은(는) … 중 하나여야 합니다`) |
 
 ### 확인 시나리오
 
@@ -901,6 +952,9 @@ Accept: application/json
 | 꼬리 칸을 다 뺌 | 꼬리 없음 — 앞 설정의 꼬리를 남기지 않는다 |
 | 꼬리 칸 일부만 · 비율 1 이상 · 최소 > 최대 · 비율 × 꼬리 평균 ≥ 평균 | 400, 설정 그대로 |
 | 지연 0 · 꼬리 0 | 적용 (비율 0 이면 몸통 평균 검사를 건너뛴다) |
+| `failureMode=MIXED` · 목록 생략 · 실패율 1.0 | 다섯 종류가 섞여 나온다. 설정 응답 `mixedResponses` 에 다섯 |
+| `mixedResponses: ["HTTP_503"]` | 실패는 전부 503 + HTML |
+| `HTTP_5XX` 에 `mixedResponses` · 빈 목록 · 중복 · `HTTP_429` | 400, 설정 그대로 |
 
 **재기동 시험과 겹칠 때 주의** — 설정이 메모리라 재기동하면 기본값으로 돌아간다. 시연 순서에 "재기동 후 설정 재입력" 을 넣어두는 게 좋다.
 

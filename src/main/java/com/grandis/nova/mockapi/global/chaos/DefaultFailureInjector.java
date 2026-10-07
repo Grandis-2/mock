@@ -3,7 +3,13 @@ package com.grandis.nova.mockapi.global.chaos;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -26,6 +32,20 @@ public class DefaultFailureInjector implements FailureInjector {
     /** 이 요청에 실제로 뽑힌 지연(ms). 부하 판정이 요청마다 오버헤드를 계산하는 데 쓴다. */
     public static final String INJECTED_LATENCY_HEADER = "X-Mock-Injected-Latency-Ms";
 
+    /**
+     * 주입한 실패의 종류({@link MixedResponse} 이름 · {@code TIMEOUT}). 주입한 실패 응답에만 붙는다.
+     *
+     * <p><b>시험용 표식이다.</b> 본문 없는 500 · HTML 502~504 에는 Mock 의 문구가 없어 부하 판정이 "주입한 실패" 와
+     * "Mock 의 진짜 오류" 를 문구로 가를 수 없다. 이 헤더로 가르고, be 로그와 대조할 때도 쓴다. 실제 앞단 장비는 이 헤더를
+     * 보내지 않으므로 <b>워커는 이 헤더로 분기하지 않는다.</b>
+     */
+    public static final String INJECTED_FAILURE_HEADER = "X-Mock-Injected-Failure";
+
+    private static final Logger log = LoggerFactory.getLogger(DefaultFailureInjector.class);
+
+    /** 등록 요청의 멱등 키 헤더. 로그에 키를 남길 때 읽는다(등록 파트의 이름과 같다). */
+    private static final String IDEMPOTENCY_KEY = "Idempotency-Key";
+
     private final ConnectionDropper dropper;
     private final MockProperties properties;
 
@@ -44,10 +64,91 @@ public class DefaultFailureInjector implements FailureInjector {
 
         switch (snapshot.failureMode()) {
             // 워커는 이것을 "일시 실패" 로 읽고 그대로 재시도한다. 커밋 전이라 아무것도 저장되지 않는다.
-            case HTTP_5XX -> throw new MockException(ErrorCode.UPSTREAM_UNAVAILABLE);
+            case HTTP_5XX -> respond(injected(MixedResponse.HTTP_500, snapshot));
             // 워커는 결과를 모른다(UNKNOWN). by-key 조회로 확인한 뒤에 재시도해야 한다.
-            case TIMEOUT -> dropper.drop("failureMode=TIMEOUT 주사위에 걸렸다");
+            case TIMEOUT -> {
+                injected("TIMEOUT", snapshot);
+                dropper.drop("failureMode=TIMEOUT 주사위에 걸렸다");
+            }
+            // 설정한 종류 중 하나를 같은 확률로. 스냅샷이 MIXED 면 목록이 비어 있지 않다(ConfigSnapshot).
+            case MIXED -> respond(injected(pick(snapshot.mixedResponses()), snapshot));
         }
+    }
+
+    private static MixedResponse injected(MixedResponse kind, ConfigSnapshot snapshot) {
+        injected(kind.name(), snapshot);
+        return kind;
+    }
+
+    /**
+     * 주입한 실패를 알린다 — 표식 헤더를 붙이고 키와 함께 로그로 남긴다.
+     *
+     * <p>로그는 be 로그와 맞대 보려고 남긴다. "Mock 이 이 키에 503 을 줬는데 워커가 어떻게 처리했나" 를 키로 찾는다.
+     * 키는 계약({@link FailureInjector#apply})에 없어 지금 요청의 헤더에서 읽는다 — 등록 입구가 형식을 이미 확인했다.
+     */
+    private static void injected(String kind, ConfigSnapshot snapshot) {
+        mark(kind);
+        log.info("실패 주입 {} key={} failureMode={} configVersion={}",
+                kind, currentKey(), snapshot.failureMode(), snapshot.configVersion());
+    }
+
+    /** 지금 요청의 멱등 키. 서블릿 요청 밖(단위 시험)이면 "-". */
+    private static String currentKey() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes servlet) {
+            String key = servlet.getRequest().getHeader(IDEMPOTENCY_KEY);
+            return key == null ? "-" : key;
+        }
+        return "-";
+    }
+
+    private static MixedResponse pick(List<MixedResponse> candidates) {
+        return candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
+    }
+
+    /**
+     * 고른 실패 응답을 보낸다. 정상 반환하지 않는다.
+     *
+     * <p>{@code errorCode} 가 있는 500 은 Mock 의 오류 형식이라 오류 처리기로 보낸다. 나머지(본문 없는 500 · HTML)는 그
+     * 형식이 아니라 직접 쓴다({@link InjectedResponseException}).
+     */
+    private static void respond(MixedResponse kind) {
+        if (kind == MixedResponse.HTTP_500) {
+            throw new MockException(ErrorCode.UPSTREAM_UNAVAILABLE);
+        }
+        HttpServletResponse response = currentResponse();
+        response.setStatus(kind.status());
+        String html = kind.html();
+        try {
+            if (html == null) {
+                response.setContentLength(0);
+            } else {
+                byte[] body = html.getBytes(StandardCharsets.UTF_8);
+                response.setContentType("text/html;charset=UTF-8");
+                response.setContentLength(body.length);
+                response.getOutputStream().write(body);
+            }
+            response.flushBuffer();
+        } catch (IOException e) {
+            // 클라이언트가 먼저 끊었다는 뜻이다. 저장된 것이 없으니 다를 것이 없다.
+            log.debug("주입한 실패 응답을 쓰는 중 입출력 오류 — 이미 끊긴 연결로 본다", e);
+        }
+        throw new InjectedResponseException(kind.name() + " 를 보냈다");
+    }
+
+    /** 주입한 실패의 종류를 표식 헤더로 남긴다. 응답이 확정되기 전이라 어느 모양에도 실린다. */
+    private static void mark(String kind) {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes servlet
+                && servlet.getResponse() != null) {
+            servlet.getResponse().setHeader(INJECTED_FAILURE_HEADER, kind);
+        }
+    }
+
+    private static HttpServletResponse currentResponse() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes servlet
+                && servlet.getResponse() != null) {
+            return servlet.getResponse();
+        }
+        throw new IllegalStateException("서블릿 요청 안에서만 쓸 수 있다");
     }
 
     /**

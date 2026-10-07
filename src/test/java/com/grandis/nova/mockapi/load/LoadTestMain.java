@@ -21,7 +21,7 @@ import java.time.format.DateTimeFormatter;
  * <p><b>Mock 을 미리 띄워 두어야 한다.</b> 이 실행기는 서버를 기동하지 않는다. 부하를 거는 쪽과 받는
  * 쪽이 같은 JVM 에 있으면 서로 자원을 뺏어 무엇을 측정한 것인지 알 수 없다.
  *
- * <p>시나리오는 세 가지다.
+ * <p>기본 시나리오다(꼬리 시나리오는 아래 {@link #scenarioConfig}).
  * <ul>
  *   <li>{@code baseline} — 기본 설정 그대로. 평소 부하
  *   <li>{@code latency} — 지연 평균 1500ms · 실패율 0. <b>관측 지연이 설정값과 비슷한지</b> 본다.
@@ -30,6 +30,8 @@ import java.time.format.DateTimeFormatter;
  *       가정하던 때라 2000 이면 주입 최대 2800ms 에 오버헤드가 붙어 타임아웃을 넘었다. 워커가 5초로
  *       정해진 지금은 2000 도 들어가지만, 앞 판정과 견줄 수 있게 1500 을 둔다
  *   <li>{@code timeout} — 실패율 1.0 · TIMEOUT. 응답 없는 연결이 쌓이는지 본다
+ *   <li>{@code mixed} — baseline 에서 모드만 MIXED(NV-312). 5% 가 500 · 본문 없는 500 · HTML 502~504 로 섞여도
+ *       판정이 baseline 과 같은지 본다 — 주입한 실패를 응답 문구가 아니라 표식 헤더로 가르는지가 핵심이다
  * </ul>
  */
 public final class LoadTestMain {
@@ -91,7 +93,7 @@ public final class LoadTestMain {
         LoadReport.Canary canary = registerCanary(baseUrl);
         put(baseUrl + CONFIG, scenarioConfig);
         String configBody = get(baseUrl + CONFIG);
-        String failureMode = configBody.contains("\"failureMode\":\"TIMEOUT\"") ? "TIMEOUT" : "HTTP_5XX";
+        String failureMode = readFailureMode(configBody);
         double failureRate = readDecimal(configBody, "failureRate", 0.0);
         int configVersion = readConfigVersion(configBody);
         // 지연은 평균값이라 요청마다 흔들린다. 흔드는 폭을 알아야 관측값에서 주입한 몫을 뺄 수 있다.
@@ -200,6 +202,9 @@ public final class LoadTestMain {
                     {"registerLatencyMs":1500,"failureRate":0.0,"failureMode":"HTTP_5XX"}""";
             case "timeout" -> """
                     {"registerLatencyMs":0,"failureRate":1.0,"failureMode":"TIMEOUT"}""";
+            // baseline 에서 모드만 MIXED(NV-312). 판정 규칙은 HTTP_5XX 와 같다(LoadReport.judge)
+            case "mixed" -> """
+                    {"registerLatencyMs":500,"failureRate":0.05,"failureMode":"MIXED"}""";
             // 느린 꼬리(NV-260). baseline 에 2% · 2~4초를 얹는다. 4000 + 허용 400 < 5000 이라 결과 불명은 0 이어야 한다
             case "tail" -> """
                     {"registerLatencyMs":500,"failureRate":0.05,"failureMode":"HTTP_5XX",
@@ -211,7 +216,7 @@ public final class LoadTestMain {
                     {"registerLatencyMs":500,"failureRate":0.0,"failureMode":"HTTP_5XX",
                      "latencyTailRate":0.005,"latencyTailMinMs":5500,"latencyTailMaxMs":6500}""";
             default -> throw new IllegalArgumentException(
-                    "시나리오는 baseline · latency · timeout · tail · tail-over-timeout 중 하나여야 합니다. 받은 값: "
+                    "시나리오는 baseline · latency · timeout · mixed · tail · tail-over-timeout 중 하나여야 합니다. 받은 값: "
                             + scenario);
         };
     }
@@ -249,6 +254,17 @@ public final class LoadTestMain {
 
     private static int readConfigVersion(String configBody) {
         return readNumber(configBody, "configVersion");
+    }
+
+    /**
+     * 적용된 실패 모드 이름 그대로. 판정 규칙이 모드마다 다르다(LoadReport.judge).
+     *
+     * <p>예전에는 "TIMEOUT 이 아니면 HTTP_5XX" 로 읽었다. 모드가 둘뿐일 때는 맞았지만 MIXED 가 생겨 이름을 그대로 읽는다.
+     * 못 읽으면 HTTP_5XX 로 본다 — 설정 응답에 모드가 없을 일은 없고, 있다면 보고서의 설정 전문에 드러난다.
+     */
+    static String readFailureMode(String configBody) {
+        var matcher = java.util.regex.Pattern.compile("\"failureMode\"\\s*:\\s*\"(\\w+)\"").matcher(configBody);
+        return matcher.find() ? matcher.group(1) : "HTTP_5XX";
     }
 
     /** 의존성을 늘리지 않으려고 숫자 하나만 긁는다. 보고서에는 설정 전문도 함께 남는다. */
