@@ -12,6 +12,7 @@ import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,8 +37,6 @@ import tools.jackson.databind.json.JsonMapper;
 class CancellationApiTest {
 
     private static final String PATH = "/external/cancellations";
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
     /** 응답 시각은 UTC Z 이고 밀리초 세 자리다. 밀리초가 0 이어도 {@code .000} 이 붙는다(JsonTimeConfigTest). */
     private static final String UTC_MILLIS = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z";
@@ -72,7 +71,7 @@ class CancellationApiTest {
         return mvc.perform(post("/external/reservations")
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY));
+                .content(RegisterBodies.of(key)));
     }
 
     private String registeredNumber(String key) throws Exception {
@@ -119,7 +118,7 @@ class CancellationApiTest {
         String number = registeredNumber(key);
 
         cancel("""
-                {"externalNumber":"%s"}""".formatted(number))
+                {"reservationNo":"%s"}""".formatted(number))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.externalKey").value(key))
                 .andExpect(jsonPath("$.externalNumbers[0]").value(number))
@@ -135,7 +134,7 @@ class CancellationApiTest {
         String number = registeredNumber(key);
 
         cancel("""
-                {"externalKey":"%s","externalNumber":"%s"}""".formatted(key, number))
+                {"externalKey":"%s","reservationNo":"%s"}""".formatted(key, number))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.hadActiveRegistration").value(true));
     }
@@ -203,7 +202,7 @@ class CancellationApiTest {
                 {"reason":"USER_CANCEL"}""")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
-                .andExpect(jsonPath("$.errorMessage").value("externalKey 와 externalNumber 중 하나는 있어야 합니다."));
+                .andExpect(jsonPath("$.errorMessage").value("externalKey 와 reservationNo 중 하나는 있어야 합니다."));
     }
 
     /** 키가 없으니 표식을 남길 수 없고, 번호는 Mock 이 등록할 때만 발급하므로 늦게 오는 등록도 없다. */
@@ -211,7 +210,7 @@ class CancellationApiTest {
     @DisplayName("번호만 받았는데 그 번호의 등록이 없으면 404")
     void unknownNumberOnly() throws Exception {
         cancel("""
-                {"externalNumber":"R-19990101-0000000000"}""")
+                {"reservationNo":"R-19990101-0000000000"}""")
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.errorCode").value("NOT_FOUND"))
                 .andExpect(jsonPath("$.errorMessage").value("등록되지 않았습니다."))
@@ -234,10 +233,10 @@ class CancellationApiTest {
         // 키 A 의 번호가 아닌 번호 / 등록 없는 키에 남의 번호
         for (String key : new String[]{keyA, unregistered}) {
             cancel("""
-                    {"externalKey":"%s","externalNumber":"%s"}""".formatted(key, numberB))
+                    {"externalKey":"%s","reservationNo":"%s"}""".formatted(key, numberB))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
-                    .andExpect(jsonPath("$.errorMessage").value("externalKey 와 externalNumber 가 서로 다른 등록을 가리킵니다."));
+                    .andExpect(jsonPath("$.errorMessage").value("externalKey 와 reservationNo 가 서로 다른 등록을 가리킵니다."));
         }
 
         assertThat(repository.findById(keyA)).get().satisfies(saved -> assertThat(saved.isActive()).isTrue());
@@ -252,7 +251,7 @@ class CancellationApiTest {
         String key = newKey();
 
         cancel("""
-                {"externalKey":"%s","externalNumber":"R-19990101-0000000000"}""".formatted(key))
+                {"externalKey":"%s","reservationNo":"R-19990101-0000000000"}""".formatted(key))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.externalNumbers.length()").value(0));
 
@@ -270,23 +269,24 @@ class CancellationApiTest {
                             .value("externalKey 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
         }
         cancel("""
-                {"externalNumber":"%s"}""".formatted("R".repeat(101)))
+                {"reservationNo":"%s"}""".formatted("R".repeat(101)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage")
-                        .value("externalNumber 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
+                        .value("reservationNo 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
     }
 
     /**
-     * be 의 예전 계약(기능명세)은 번호를 {@code reservationNo} 로 보냈다. 조용히 버리면 번호 확인 없이
-     * 키로만 취소되므로, 모르는 필드로 거절해 계약이 어긋났다는 걸 드러낸다.
+     * 번호는 본 서비스(preorder) 본문대로 {@code reservationNo} 로 받는다(2026-10-06 be 결정으로 Mock 이 맞췄다).
+     * 예전 Mock 이름 {@code externalNumber} 로 보내면 조용히 버리지 않는다 — 버리면 번호 확인 없이 키로만
+     * 취소되므로, 모르는 필드로 거절해 계약이 어긋났다는 걸 드러낸다.
      */
     @Test
-    @DisplayName("계약에 없는 필드는 400 - 예전 계약의 reservationNo")
+    @DisplayName("계약에 없는 필드는 400 - 예전 이름 externalNumber")
     void unknownField() throws Exception {
         cancel("""
-                {"externalKey":"%s","reservationNo":null}""".formatted(newKey()))
+                {"externalKey":"%s","externalNumber":null}""".formatted(newKey()))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage", containsString("reservationNo 은(는) 알 수 없는 필드입니다.")));
+                .andExpect(jsonPath("$.errorMessage", containsString("externalNumber 은(는) 알 수 없는 필드입니다.")));
     }
 
     @Test

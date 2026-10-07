@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.load;
 
 import com.grandis.nova.mockapi.global.chaos.DefaultFailureInjector;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -29,8 +30,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class LoadRunner {
 
     private static final String RESERVATIONS = "/external/reservations";
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
     private static final java.util.regex.Pattern EXTERNAL_NUMBER =
             java.util.regex.Pattern.compile("\"externalNumber\"\\s*:\\s*\"([^\"]+)\"");
@@ -143,7 +142,7 @@ public final class LoadRunner {
                 .header("Content-Type", "application/json")
                 .header("Idempotency-Key", key)
                 .timeout(plan.responseTimeout())
-                .POST(HttpRequest.BodyPublishers.ofString(BODY))
+                .POST(HttpRequest.BodyPublishers.ofString(RegisterBodies.of(key)))
                 .build();
 
         trackEnter();

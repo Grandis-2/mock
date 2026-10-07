@@ -26,15 +26,15 @@ public class CancellationController {
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public CancelResponse cancel(@Valid @RequestBody CancelRequest request) {
         String key = request.externalKey();
-        String number = request.externalNumber();
+        String number = request.reservationNo();
         if (key == null && number == null) {
-            throw new MockException(ErrorCode.INVALID_REQUEST, "externalKey 와 externalNumber 중 하나는 있어야 합니다.");
+            throw new MockException(ErrorCode.INVALID_REQUEST, "externalKey 와 reservationNo 중 하나는 있어야 합니다.");
         }
         if (key != null) {
             Identifiers.requireFormat("externalKey", key);
         }
         if (number != null) {
-            Identifiers.requireFormat("externalNumber", number);
+            Identifiers.requireFormat("reservationNo", number);
         }
         return CancelResponse.from(service.cancel(key, number));
     }

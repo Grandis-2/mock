@@ -129,18 +129,19 @@ public class Registration implements Persistable<String> {
      * 같은 키의 재요청과 저장된 내용이 다른 칸. 비어 있으면 같은 신청이다.
      *
      * <p>저장된 세 칸을 직접 비교한다. 해시로 비교하면 어느 칸이 달라 거절됐는지 알려줄 수 없다.
-     * 이름은 응답 메시지에 그대로 쓰이므로 API 필드 이름이다.
+     * 이름은 거절 메시지에 그대로 쓰이므로 <b>요청 필드 이름</b>이다(customerRef · itemCode · optionCode).
+     * 보낸 쪽이 자기 본문에서 찾을 수 있어야 한다 — 원장 칸 이름으로 알려 주면 그런 필드는 보낸 적이 없다.
      */
     public List<String> differingFields(Long customerId, Long productId, String sku) {
         List<String> fields = new ArrayList<>(3);
         if (!Objects.equals(this.customerId, customerId)) {
-            fields.add("customerId");
+            fields.add("customerRef");
         }
         if (!Objects.equals(this.productId, productId)) {
-            fields.add("productId");
+            fields.add("itemCode");
         }
         if (!Objects.equals(this.sku, sku)) {
-            fields.add("sku");
+            fields.add("optionCode");
         }
         return fields;
     }

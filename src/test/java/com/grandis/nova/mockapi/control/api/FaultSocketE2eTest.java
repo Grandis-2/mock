@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,8 +39,6 @@ import org.springframework.web.client.RestClient;
 class FaultSocketE2eTest {
 
     private static final String KEY = "socket-lost-1";
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
     /** 워커 읽기 타임아웃 자리. 유지 시간(3초)보다 짧아야 워커가 겪는 결과 불명이 된다. */
     private static final Duration WORKER_READ_TIMEOUT = Duration.ofSeconds(1);
@@ -74,7 +73,7 @@ class FaultSocketE2eTest {
         return client.post().uri("/external/reservations")
                 .header("Idempotency-Key", KEY)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(BODY)
+                .body(RegisterBodies.of(KEY))
                 .retrieve()
                 .toEntity(String.class);
     }

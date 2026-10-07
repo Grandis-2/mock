@@ -26,6 +26,7 @@ import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -59,8 +60,6 @@ import tools.jackson.databind.json.JsonMapper;
 class RegistrationApiTest {
 
     private static final String PATH = "/external/reservations";
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
     @Autowired
     private MockMvc mvc;
@@ -102,6 +101,11 @@ class RegistrationApiTest {
         return UUID.randomUUID().toString();
     }
 
+    /** 기본 신청 내용으로 등록한다. 본문의 {@code ourReservationId} 는 키와 같다. */
+    private ResultActions register(String key) throws Exception {
+        return register(key, RegisterBodies.of(key));
+    }
+
     private ResultActions register(String key, String body) throws Exception {
         return mvc.perform(post(PATH)
                 .header("Idempotency-Key", key)
@@ -119,15 +123,19 @@ class RegistrationApiTest {
         String key = newKey();
         int version = store.snapshot().configVersion();
 
-        register(key, BODY)
+        register(key)
                 .andExpect(status().isCreated())
                 .andExpect(header().string("X-Idempotent-Replay", "false"))
                 .andExpect(header().string("X-Mock-Config-Version", String.valueOf(version)))
                 .andExpect(jsonPath("$.externalKey").value(key))
                 .andExpect(jsonPath("$.externalNumber", matchesPattern("R-\\d{8}-\\d{10}")))
+                // 응답은 원장(ERD) 이름이다. 요청의 customerRef · itemCode 문자열은 숫자로 바뀌어 있다
                 .andExpect(jsonPath("$.customerId").value(1001))
                 .andExpect(jsonPath("$.productId").value(12))
                 .andExpect(jsonPath("$.sku").value("SM-G999-256-BLK"))
+                // qty · scope 는 저장하지 않으므로 응답에도 없다
+                .andExpect(jsonPath("$.qty").doesNotExist())
+                .andExpect(jsonPath("$.scope").doesNotExist())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.confirmedAt",
                         matchesPattern("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z")))
@@ -140,8 +148,8 @@ class RegistrationApiTest {
     void replaySameContent() throws Exception {
         String key = newKey();
 
-        JsonNode first = bodyOf(register(key, BODY).andExpect(header().string("X-Idempotent-Replay", "false")));
-        JsonNode second = bodyOf(register(key, BODY)
+        JsonNode first = bodyOf(register(key).andExpect(header().string("X-Idempotent-Replay", "false")));
+        JsonNode second = bodyOf(register(key)
                 .andExpect(status().isCreated())
                 .andExpect(header().string("X-Idempotent-Replay", "true")));
 
@@ -150,16 +158,15 @@ class RegistrationApiTest {
     }
 
     @Test
-    @DisplayName("같은 키 · 다른 sku - 422, 기존 번호를 알려주고 기존 등록은 그대로다")
+    @DisplayName("같은 키 · 다른 optionCode - 422, 기존 번호를 알려주고 기존 등록은 그대로다")
     void payloadMismatch() throws Exception {
         String key = newKey();
-        String number = bodyOf(register(key, BODY)).get("externalNumber").asString();
+        String number = bodyOf(register(key)).get("externalNumber").asString();
 
-        register(key, """
-                {"customerId":1001,"productId":12,"sku":"SM-G999-512-WHT"}""")
+        register(key, RegisterBodies.of(key, RegisterBodies.CUSTOMER_REF, "SM-G999-512-WHT"))
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.errorCode").value("KEY_PAYLOAD_MISMATCH"))
-                .andExpect(jsonPath("$.errorMessage").value("같은 키로 다른 내용이 요청되었습니다. sku 이(가) 다릅니다."))
+                .andExpect(jsonPath("$.errorMessage").value("같은 키로 다른 내용이 요청되었습니다. optionCode 이(가) 다릅니다."))
                 .andExpect(jsonPath("$.replayable").value(false))
                 .andExpect(jsonPath("$.externalNumber").value(number));
 
@@ -171,11 +178,72 @@ class RegistrationApiTest {
     @DisplayName("다른 칸이 여럿이면 전부 알려준다")
     void payloadMismatchListsEveryField() throws Exception {
         String key = newKey();
-        register(key, BODY);
+        register(key);
 
-        register(key, """
-                {"customerId":2002,"productId":12,"sku":"SM-G999-512-WHT"}""")
-                .andExpect(jsonPath("$.errorMessage", containsString("customerId, sku 이(가) 다릅니다.")));
+        register(key, RegisterBodies.of(key, "2002", "SM-G999-512-WHT"))
+                .andExpect(jsonPath("$.errorMessage", containsString("customerRef, optionCode 이(가) 다릅니다.")));
+    }
+
+    /**
+     * 원장 칸이 숫자라 참조 · 코드는 숫자로 바꿔 넣는다. 앞에 0 이 붙은 값을 받아 바꾸면 {@code "1001"} 과 조용히 같은
+     * 신청이 되므로, 바꾸지 않고 400 으로 막는다(같은 키 · 다른 내용의 422 가 아니다). 숫자가 아닌 값 · {@code long}
+     * 범위를 넘을 수 있는 19자리도 같다. 어느 경우도 원장에 남지 않는다.
+     */
+    @Test
+    @DisplayName("참조 · 코드는 0 으로 시작하지 않는 1~18자리 숫자만 - 앞에 0 · 숫자 아님 · 19자리는 400")
+    void referencesMustBeCanonicalNumbers() throws Exception {
+        String key = newKey();
+        for (String ref : new String[]{"01001", "0", "C-1001", "1001 ", "-1", "1".repeat(19), ""}) {
+            register(key, RegisterBodies.of(key, ref, RegisterBodies.OPTION_CODE))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.errorMessage")
+                            .value("customerRef 은(는) 0 으로 시작하지 않는 1~18자리 숫자여야 합니다."));
+        }
+        register(key, RegisterBodies.of(key).replace("\"itemCode\":\"12\"", "\"itemCode\":\"012\""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorMessage")
+                        .value("itemCode 은(는) 0 으로 시작하지 않는 1~18자리 숫자여야 합니다."));
+        assertThat(repository.findById(key)).isEmpty();
+
+        // 18자리 최댓값은 받는다
+        String max = newKey();
+        register(max, RegisterBodies.of(max, "9".repeat(18), RegisterBodies.OPTION_CODE))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.customerId").value(999_999_999_999_999_999L));
+    }
+
+    /** 사전예약은 수량 1 고정이다. 1 이 아니면 같은 키 · 다른 내용(422)이 아니라 잘못된 요청(400)이다. */
+    @Test
+    @DisplayName("qty 가 1 이 아니면 400 - 처음 등록이든 같은 키 재요청이든")
+    void quantityMustBeOne() throws Exception {
+        String key = newKey();
+        for (String qty : new String[]{"0", "2", "-1"}) {
+            register(key, RegisterBodies.of(key).replace("\"qty\":1", "\"qty\":" + qty))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorMessage").value("qty 은(는) 1 이어야 합니다."));
+        }
+        assertThat(repository.findById(key)).isEmpty();
+
+        register(key).andExpect(status().isCreated());
+        register(key, RegisterBodies.of(key).replace("\"qty\":1", "\"qty\":2"))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * {@code scope} 는 저장 · 비교하지 않는다(ERD 에 칸 없음). 그래서 같은 키로 {@code scope} 만 달라도 같은 신청으로
+     * 보고 재생한다. 본 서비스는 접수 때 본문을 고정하므로 정상 흐름에서는 생기지 않는다(명세 「내용 비교」).
+     */
+    @Test
+    @DisplayName("같은 키로 scope 만 다르면 재생한다 - scope 는 비교 대상이 아니다")
+    void scopeIsNotCompared() throws Exception {
+        String key = newKey();
+        String number = bodyOf(register(key)).get("externalNumber").asString();
+
+        register(key, RegisterBodies.of(key).replace("\"scope\":\"preorder\"", "\"scope\":\"other\""))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("X-Idempotent-Replay", "true"))
+                .andExpect(jsonPath("$.externalNumber").value(number));
     }
 
     @Test
@@ -184,7 +252,7 @@ class RegistrationApiTest {
         String key = newKey();
         repository.saveAndFlush(Registration.cancelMarker(key, Instant.now()));
 
-        register(key, BODY)
+        register(key)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("KEY_CANCELED"))
                 .andExpect(jsonPath("$.replayable").value(true))
@@ -201,14 +269,14 @@ class RegistrationApiTest {
     @DisplayName("등록 → 취소 → 같은 키 재등록 - 201 재생이 아니라 409 다")
     void registerCancelRegister() throws Exception {
         String key = newKey();
-        String number = bodyOf(register(key, BODY)).get("externalNumber").asString();
+        String number = bodyOf(register(key)).get("externalNumber").asString();
         mvc.perform(post("/external/cancellations")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"externalKey":"%s"}""".formatted(key)))
                 .andExpect(status().isOk());
 
-        register(key, BODY)
+        register(key)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("KEY_CANCELED"))
                 .andExpect(jsonPath("$.externalNumber").value(number));
@@ -225,14 +293,14 @@ class RegistrationApiTest {
         store.update(0, 1.0, FailureMode.HTTP_5XX);
 
         for (int i = 0; i < 10; i++) {
-            register(key, BODY)
+            register(key)
                     .andExpect(status().isInternalServerError())
                     .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"));
         }
         assertThat(repository.findById(key)).isEmpty();
 
         store.update(0, 0.0, FailureMode.HTTP_5XX);
-        register(key, BODY)
+        register(key)
                 .andExpect(status().isCreated())
                 .andExpect(header().string("X-Idempotent-Replay", "false"));
     }
@@ -242,7 +310,7 @@ class RegistrationApiTest {
     void configVersionHeader() throws Exception {
         int changed = store.update(0, 0.0, FailureMode.HTTP_5XX).snapshot().configVersion();
 
-        register(newKey(), BODY)
+        register(newKey())
                 .andExpect(header().string("X-Mock-Config-Version", String.valueOf(changed)));
     }
 
@@ -259,7 +327,7 @@ class RegistrationApiTest {
             return invocation.callRealMethod();
         }).when(failureInjector).apply(any());
 
-        register(newKey(), BODY).andExpect(status().isCreated());
+        register(newKey()).andExpect(status().isCreated());
 
         assertThat(inTransaction).isFalse();
     }
@@ -293,8 +361,8 @@ class RegistrationApiTest {
                 .doReturn("R-19990101-0000000002") // 둘째 키 재시도
                 .when(numbers).next(any());
 
-        register(newKey(), BODY).andExpect(jsonPath("$.externalNumber").value("R-19990101-0000000001"));
-        register(newKey(), BODY)
+        register(newKey()).andExpect(jsonPath("$.externalNumber").value("R-19990101-0000000001"));
+        register(newKey())
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.externalNumber").value("R-19990101-0000000002"));
 
@@ -309,10 +377,10 @@ class RegistrationApiTest {
     @DisplayName("번호가 계속 겹쳐 재시도 상한을 넘기면 상한 초과라고 적힌 500 이다")
     void retryExhaustedIsNamed() throws Exception {
         doReturn("R-19990101-0000000009").when(numbers).next(any());   // 매번 같은 번호
-        register(newKey(), BODY).andExpect(status().isCreated());
+        register(newKey()).andExpect(status().isCreated());
 
         String key = newKey();
-        register(key, BODY)
+        register(key)
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"))
                 .andExpect(jsonPath("$.errorMessage").value(DuplicateKeyRetry.RETRY_EXHAUSTED));
@@ -337,13 +405,13 @@ class RegistrationApiTest {
         when(faultHook.consumeResponseLost(anyString())).thenReturn(true);
 
         // 연결 끊기로 들어갔다는 것만 본다 — 오류 본문 없이 끝났다
-        register(key, BODY)
+        register(key)
                 .andExpect(status().isInternalServerError())
                 .andExpect(content().string(""));
         assertThat(repository.findById(key)).get()
                 .satisfies(saved -> assertThat(saved.isActive()).isTrue());
 
-        register(key, BODY)
+        register(key)
                 .andExpect(status().isCreated())
                 .andExpect(header().string("X-Idempotent-Replay", "true"));
         // 재생 요청에서는 결함을 묻지도 않는다
@@ -353,7 +421,7 @@ class RegistrationApiTest {
     @Test
     @DisplayName("Idempotency-Key 가 없으면 400")
     void missingKey() throws Exception {
-        mvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content(BODY))
+        mvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content(RegisterBodies.of(newKey())))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage").value("Idempotency-Key 헤더가 필요합니다."));
     }
@@ -366,13 +434,14 @@ class RegistrationApiTest {
     @DisplayName("Idempotency-Key 는 영문 · 숫자 · . _ - 1~100자 - 그 밖은 400")
     void invalidKeyFormat() throws Exception {
         for (String key : new String[]{"   ", "k".repeat(101), "pad-1 ", "a b", "a/b", "키-1", "a,b", ".", ".."}) {
-            register(key, BODY)
+            // 본문은 올바른 키로 둔다. 본문 검증(@Valid)이 헤더 형식 검사보다 먼저 돌아 다른 문장이 나오지 않게.
+            register(key, RegisterBodies.of(newKey()))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errorMessage")
                             .value("Idempotency-Key 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다."));
         }
         for (String key : new String[]{"k".repeat(100), newKey(), "test-lost_1.v2", "..." + newKey()}) {
-            register(key, BODY).andExpect(status().isCreated());
+            register(key).andExpect(status().isCreated());
         }
     }
 
@@ -386,7 +455,7 @@ class RegistrationApiTest {
         mvc.perform(post(PATH)
                         .header("Idempotency-Key", first, second)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(BODY))
+                        .content(RegisterBodies.of(first)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
 
@@ -397,27 +466,48 @@ class RegistrationApiTest {
     @Test
     @DisplayName("본문 검증 - 필드 이름을 담아 400")
     void invalidBody() throws Exception {
-        register(newKey(), """
-                {"customerId":1001,"productId":12}""")
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage").value("sku 은(는) 필수입니다."));
+        String key = newKey();
 
-        register(newKey(), """
-                {"customerId":1001,"productId":12,"sku":"%s"}""".formatted("S".repeat(81)))
+        register(key, """
+                {"ourReservationId":"%s","customerRef":"1001","itemCode":"12","qty":1,"scope":"preorder"}"""
+                .formatted(key))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage").value("sku 은(는) 80자 이하여야 합니다."));
+                .andExpect(jsonPath("$.errorMessage").value("optionCode 은(는) 필수입니다."));
+
+        register(key, RegisterBodies.of(key, RegisterBodies.CUSTOMER_REF, "S".repeat(81)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorMessage").value("optionCode 은(는) 80자 이하여야 합니다."));
 
         // 타입을 바꿔 받지 않는다. 받으면 워커의 타입 오류가 Mock 에서는 묻힌다
-        register(newKey(), """
-                {"customerId":"1001","productId":12,"sku":"SM-G999-256-BLK"}""")
+        register(key, RegisterBodies.of(key).replace("\"customerRef\":\"1001\"", "\"customerRef\":1001"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage").value("customerId 값의 형식이 올바르지 않습니다."));
+                .andExpect(jsonPath("$.errorMessage").value("customerRef 값의 형식이 올바르지 않습니다."));
 
-        // 예전 README 계약의 필드. 계약에 없는 필드는 거절한다
-        register(newKey(), """
-                {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK","quantity":1}""")
+        // 예전 Mock 계약의 필드(ERD 이름). 계약에 없는 필드는 거절한다
+        register(key, RegisterBodies.of(key).replace("\"customerRef\"", "\"customerId\""))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage", containsString("quantity 은(는) 알 수 없는 필드입니다.")));
+                .andExpect(jsonPath("$.errorMessage", containsString("customerId 은(는) 알 수 없는 필드입니다.")));
+
+        assertThat(repository.findById(key)).isEmpty();
+    }
+
+    /**
+     * 본문의 {@code ourReservationId} 와 헤더의 키는 같은 값(preorder_token)이다. 다르면 어느 쪽으로 멱등 처리할지
+     * 정할 수 없으므로 처리 전에 거절한다. 어느 키로도 저장하지 않는다.
+     */
+    @Test
+    @DisplayName("ourReservationId 가 Idempotency-Key 와 다르면 400 - 어느 키로도 저장하지 않는다")
+    void reservationIdMustMatchKey() throws Exception {
+        String key = newKey();
+        String other = newKey();
+
+        register(key, RegisterBodies.of(other))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errorMessage").value("ourReservationId 가 Idempotency-Key 와 다릅니다."));
+
+        assertThat(repository.findById(key)).isEmpty();
+        assertThat(repository.findById(other)).isEmpty();
     }
 
     /**
@@ -433,7 +523,7 @@ class RegistrationApiTest {
                         .header("Idempotency-Key", key)
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(MediaType.TEXT_PLAIN)
-                        .content(BODY))
+                        .content(RegisterBodies.of(key)))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
@@ -450,7 +540,7 @@ class RegistrationApiTest {
         mvc.perform(post(PATH)
                         .header("Idempotency-Key", wildcard)
                         .contentType("application/*")
-                        .content(BODY))
+                        .content(RegisterBodies.of(wildcard)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errorMessage", containsString("Content-Type")));

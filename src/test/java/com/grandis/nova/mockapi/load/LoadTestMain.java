@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.load;
 
 import com.grandis.nova.mockapi.global.chaos.LatencyTail;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -166,8 +167,7 @@ public final class LoadTestMain {
                     .header("Content-Type", "application/json")
                     .header("Idempotency-Key", key)
                     .timeout(Duration.ofSeconds(5))
-                    .POST(HttpRequest.BodyPublishers.ofString("""
-                            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}"""))
+                    .POST(HttpRequest.BodyPublishers.ofString(RegisterBodies.of(key)))
                     .build();
             HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
             var number = java.util.regex.Pattern.compile("\"externalNumber\"\\s*:\\s*\"([^\"]+)\"")

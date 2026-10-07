@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,8 +39,6 @@ class FaultFlowTest {
     private static final String FAULTS = "/external/faults";
     private static final String RESERVATIONS = "/external/reservations";
     private static final String KEY = "flow-lost-1";
-    private static final String BODY = """
-            {"customerId":1001,"productId":12,"sku":"SM-G999-256-BLK"}""";
 
     @Autowired
     private MockMvc mvc;
@@ -60,7 +59,7 @@ class FaultFlowTest {
         return mvc.perform(post(RESERVATIONS)
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(BODY));
+                .content(RegisterBodies.of(key)));
     }
 
     /**
