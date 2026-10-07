@@ -61,7 +61,7 @@ class RequestBodyErrorTest {
                 {"count":1,"mode":"HTTP_429"}""")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage")
-                        .value("mode 은(는) HTTP_5XX, TIMEOUT 중 하나여야 합니다. 받은 값: HTTP_429"));
+                        .value("mode 은(는) HTTP_5XX, TIMEOUT, MIXED 중 하나여야 합니다. 받은 값: HTTP_429"));
     }
 
     @Test
@@ -111,7 +111,7 @@ class RequestBodyErrorTest {
         send("""
                 {"count":1,"mode":1}""")
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errorMessage", containsString("mode 은(는) HTTP_5XX, TIMEOUT 중 하나여야 합니다.")));
+                .andExpect(jsonPath("$.errorMessage", containsString("mode 은(는) HTTP_5XX, TIMEOUT, MIXED 중 하나여야 합니다.")));
     }
 
     record ProbeBody(Integer count, FailureMode mode) {

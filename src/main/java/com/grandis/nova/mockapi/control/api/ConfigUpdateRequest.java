@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.control.api;
 
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.LatencyTail;
+import com.grandis.nova.mockapi.global.chaos.MixedResponse;
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
 import jakarta.validation.constraints.DecimalMax;
@@ -10,7 +11,9 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 설정 변경 요청.
@@ -53,11 +56,54 @@ public record ConfigUpdateRequest(
         /** 선택(꼬리 묶음). 꼬리 구간 상한(포함). */
         @Min(value = 0, message = "은(는) 0 이상이어야 합니다.")
         @Max(value = 60000, message = "은(는) 60000 이하여야 합니다.")
-        Integer latencyTailMaxMs
+        Integer latencyTailMaxMs,
+
+        /**
+         * 선택. {@code failureMode=MIXED} 에서 섞을 실패 응답 종류. 생략하면 전부, 하나만 주면 그 응답만 나온다.
+         * 모르는 이름은 역직렬화 단계에서 400 이다. 칸 사이의 관계는 {@link #mixedResponsesFor(FailureMode)} 가 본다.
+         */
+        List<MixedResponse> mixedResponses
 ) {
 
     public FailureMode failureModeOrDefault() {
         return failureMode == null ? FailureMode.HTTP_5XX : failureMode;
+    }
+
+    /**
+     * 적용할 섞기 목록. 모드와 함께 봐야 해서 애너테이션이 아니라 여기서 검사한다.
+     *
+     * <ul>
+     *   <li>MIXED 가 아닌데 목록을 주면 400 — 조용히 버리면 보낸 사람이 "섞이고 있다" 고 믿는다(결함의 {@code delayMs} 와 같은 규칙)</li>
+     *   <li>MIXED 인데 생략하면 전부. 빈 목록은 400 — 고를 것이 없다</li>
+     *   <li>같은 이름이 두 번이면 400 — 그 종류만 두 배로 나오길 바란 것인지 실수인지 알 수 없다</li>
+     * </ul>
+     *
+     * @return MIXED 가 아니면 빈 목록, MIXED 면 고른 종류(생략 시 빈 목록 → 스냅샷이 전부로 채운다)
+     * @throws MockException 위 규칙에 어긋나면 400
+     */
+    public List<MixedResponse> mixedResponsesFor(FailureMode mode) {
+        if (mode != FailureMode.MIXED) {
+            if (mixedResponses != null) {
+                throw invalid("mixedResponses 은(는) failureMode 가 MIXED 일 때만 보낼 수 있습니다.");
+            }
+            return List.of();
+        }
+        if (mixedResponses == null) {
+            return List.of();
+        }
+        if (mixedResponses.isEmpty()) {
+            throw invalid("mixedResponses 은(는) 비어 있을 수 없습니다. 섞을 종류를 하나 이상 주거나 칸을 빼면 전부를 섞습니다.");
+        }
+        if (mixedResponses.contains(null)) {
+            throw invalid("mixedResponses 에 빈 값이 있습니다.");
+        }
+        Set<MixedResponse> seen = EnumSet.noneOf(MixedResponse.class);
+        for (MixedResponse response : mixedResponses) {
+            if (!seen.add(response)) {
+                throw invalid("mixedResponses 에 " + response + " 이(가) 두 번 있습니다.");
+            }
+        }
+        return mixedResponses;
     }
 
     /**

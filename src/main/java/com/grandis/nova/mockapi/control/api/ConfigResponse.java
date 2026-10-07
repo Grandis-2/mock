@@ -2,9 +2,11 @@ package com.grandis.nova.mockapi.control.api;
 
 import com.grandis.nova.mockapi.global.chaos.ConfigSnapshot;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
+import com.grandis.nova.mockapi.global.chaos.MixedResponse;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 설정 조회·변경의 응답. 둘이 같은 형식이다.
@@ -27,6 +29,7 @@ import java.time.Instant;
  *                            낮춘 값(반올림). 꼬리가 없으면 {@code registerLatencyMs} 와 같다. 읽기 전용이다
  * @param timeoutHoldMs       {@code TIMEOUT} · 결함이 응답 없이 붙잡는 시간. 설정 파일로만 정한다(읽기 전용).
  *                            부하 보고서가 "어떤 조건의 Mock 이었나" 를 남기는 데 쓴다
+ * @param mixedResponses      {@code failureMode=MIXED} 에서 섞는 실패 응답 종류. MIXED 가 아니면 빈 목록
  * @param workerReadTimeoutMs 워커 읽기 타임아웃으로 적어 둔 값. 설정 파일로만 정한다(읽기 전용)
  */
 public record ConfigResponse(
@@ -38,6 +41,7 @@ public record ConfigResponse(
         long bodyLatencyMs,
         double failureRate,
         FailureMode failureMode,
+        List<MixedResponse> mixedResponses,
         int configVersion,
         Instant appliedAt,
         long timeoutHoldMs,
@@ -56,6 +60,7 @@ public record ConfigResponse(
                 Math.round(snapshot.latencyTail().bodyMeanMs(snapshot.registerLatencyMs())),
                 snapshot.failureRate(),
                 snapshot.failureMode(),
+                snapshot.mixedResponses(),
                 snapshot.configVersion(),
                 applied.appliedAt(),
                 properties.timeoutHoldMs(),
