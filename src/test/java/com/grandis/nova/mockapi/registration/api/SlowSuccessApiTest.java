@@ -40,7 +40,7 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <p>등록은 지연 주입 뒤 · 중복 키 재시도 앞(트랜잭션 밖 · 키 행 잠금 전)에서 기다린다. 그래서 기다리는 동안은 행이
  * 없어 키 조회가 404 이고, 같은 키 재시도 · 취소가 먼저 끝난다. 워커가 포기한 뒤에 늦게 커밋되는 등록과, 그때
- * 같은 키 재시도 · 포기 전 취소 표식 규칙이 제대로 막아 내는지를 키 하나로 확실히 본다.
+ * 같은 키 재시도 · 예약 취소 때의 취소 표식 규칙이 제대로 막아 내는지를 키 하나로 확실히 본다.
  *
  * <p>결함은 결함 API 로 걸고 실제 보관소가 기다린다. 보관소를 감시만 하는 이유는 원래 요청이 <b>결함을 꺼내고
  * 잠든 뒤</b>에 끼워 넣어야 해서다 — 꺼내기 전에 끼워 넣으면 끼워 넣은 요청이 결함을 가로채 순서가 뒤집힌다.
@@ -202,7 +202,7 @@ class SlowSuccessApiTest {
         assertThat(saved.externalNumber()).isEqualTo(number);
     }
 
-    /** 워커가 포기하며 같은 키로 먼저 취소하면 표식이 남고, 늦게 깨어난 등록은 그 표식에 막힌다. */
+    /** 기다리는 동안 예약이 취소돼 같은 키로 취소하면 표식이 남고, 늦게 깨어난 등록은 그 표식에 막힌다. */
     @Test
     @DisplayName("기다리는 동안 같은 키 취소 - 표식이 남고 원래 요청은 깨어나 KEY_CANCELED. 등록 없음")
     void cancelDuringHold() throws Exception {
@@ -214,7 +214,7 @@ class SlowSuccessApiTest {
         MockHttpServletResponse canceled = mvc.perform(post("/external/cancellations")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"externalKey":"%s","reason":"RETRY_EXHAUSTED"}""".formatted(key)))
+                                {"externalKey":"%s","reason":"USER_CANCEL"}""".formatted(key)))
                 .andReturn().getResponse();
         assertThat(canceled.getStatus()).isEqualTo(200);
         assertThat(bodyOf(canceled).get("hadActiveRegistration").asBoolean()).isFalse();
