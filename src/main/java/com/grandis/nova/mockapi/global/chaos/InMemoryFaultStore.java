@@ -2,6 +2,8 @@ package com.grandis.nova.mockapi.global.chaos;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -17,6 +19,8 @@ public class InMemoryFaultStore implements FaultHook {
     /** 걸어 둔 결함 하나. 기다리는 시간은 느린 성공에만 쓴다(응답 유실은 0). */
     private record Fault(FaultType type, long delayMs) {
     }
+
+    private static final Logger log = LoggerFactory.getLogger(InMemoryFaultStore.class);
 
     private final ConcurrentHashMap<String, Fault> faults = new ConcurrentHashMap<>();
 
@@ -74,7 +78,17 @@ public class InMemoryFaultStore implements FaultHook {
             taken.set(fault);
             return null;
         });
-        return taken.get();
+        Fault fault = taken.get();
+        if (fault != null) {
+            // 실패 주입 로그(DefaultFailureInjector)와 같은 모양이다. be 로그와 키로 맞대 본다.
+            // 기다리는 시간은 느린 성공에만 있다 — 응답 유실에 delayMs=0 을 찍으면 "0ms 기다렸다" 로 읽힌다
+            if (fault.type() == FaultType.SLOW_SUCCESS) {
+                log.info("결함 발동 {} key={} delayMs={}", fault.type(), externalKey, fault.delayMs());
+            } else {
+                log.info("결함 발동 {} key={}", fault.type(), externalKey);
+            }
+        }
+        return fault;
     }
 
     /** 시험용 — 결함이 아직 걸려 있는가. 꺼내기와 기다리기의 순서를 볼 때 쓴다. */
