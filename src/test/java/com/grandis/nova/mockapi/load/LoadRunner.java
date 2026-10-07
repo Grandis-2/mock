@@ -152,6 +152,11 @@ public final class LoadRunner {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             Duration latency = Duration.between(sentAt, Instant.now());
             Outcome outcome = Outcome.ofStatus(response.statusCode());
+            // 주입한 실패는 표식 헤더로 알아본다. 본문 없는 500 · HTML 502~504 는 문구가 없어 문구로는 가를 수 없다
+            String injectedFailure = response.headers()
+                    .firstValue(DefaultFailureInjector.INJECTED_FAILURE_HEADER).orElse(null);
+            String detail = injectedFailure != null ? "주입 " + injectedFailure
+                    : response.statusCode() >= 500 ? errorMessageOf(response.body()) : null;
             report.add(new LoadReport.Attempt(
                     key,
                     outcome == Outcome.ACCEPTED ? externalNumberOf(response.body()) : null,
@@ -159,7 +164,8 @@ public final class LoadRunner {
                     response.statusCode(),
                     latency,
                     injectedMsOf(response),
-                    response.statusCode() >= 500 ? errorMessageOf(response.body()) : null));
+                    detail,
+                    injectedFailure));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             report.add(new LoadReport.Attempt(

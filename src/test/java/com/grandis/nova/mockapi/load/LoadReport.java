@@ -1,6 +1,6 @@
 package com.grandis.nova.mockapi.load;
 
-import com.grandis.nova.mockapi.global.error.ErrorCode;
+import com.grandis.nova.mockapi.global.chaos.DefaultFailureInjector;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -31,11 +31,20 @@ public final class LoadReport {
      *                       DB 에 적힌 번호와 같은지 봐야 "행은 있는데 다른 번호" 를 잡을 수 있다
      * @param injectedMs     이 요청에 Mock 이 실제로 넣은 지연({@code X-Mock-Injected-Latency-Ms}).
      *                       응답이 없거나 헤더가 없으면 null. 오버헤드는 요청마다 {@code latency − 이 값} 이다
-     * @param detail         5xx 면 응답의 {@code errorMessage}, 응답을 못 받았으면 예외 종류. 그 밖에는 null.
-     *                       같은 500 이라도 주입 실패와 Mock 의 진짜 오류(교착 등)를 가르는 데 쓴다
+     * @param detail         보고서의 "접수되지 않은 요청" 내역에 쓰는 설명. 주입한 실패면 그 종류(예: {@code 주입 HTTP_503}),
+     *                       그 밖의 5xx 면 응답의 {@code errorMessage}, 응답을 못 받았으면 예외 종류. 그 밖에는 null
+     * @param injectedFailure 주입 표식({@code X-Mock-Injected-Failure}). 주입한 실패 응답에만 있다. 같은 500 이라도
+     *                       주입 실패와 Mock 의 진짜 오류(교착 · 재시도 상한 · 대기 중 중단)를 이것으로 가른다
      */
     public record Attempt(String externalKey, String externalNumber,
-                          Outcome outcome, int status, Duration latency, Long injectedMs, String detail) {
+                          Outcome outcome, int status, Duration latency, Long injectedMs, String detail,
+                          String injectedFailure) {
+
+        /** 주입 표식이 없는 결과. 응답을 받지 못했거나 주입한 실패가 아니다. */
+        public Attempt(String externalKey, String externalNumber,
+                       Outcome outcome, int status, Duration latency, Long injectedMs, String detail) {
+            this(externalKey, externalNumber, outcome, status, latency, injectedMs, detail, null);
+        }
 
         /** 응답을 받지 못한 요청. 주입 지연을 알 수 없다. */
         public Attempt(String externalKey, String externalNumber,
@@ -262,12 +271,6 @@ public final class LoadReport {
 
     // ---------------------------------------------------------------- 판정
 
-    /**
-     * 주입 실패의 {@code errorMessage}(api.md 500 원인표). 같은 500 이라도 이 문구가 아니면 Mock 의 진짜 오류다 —
-     * 교착 · 재시도 상한 · 유지 시간 뒤의 빈 500. 예전에는 모두 "5%" 에 섞여 들어갔다(리뷰 H3 ④).
-     */
-    static final String INJECTED_FAILURE_MESSAGE = ErrorCode.UPSTREAM_UNAVAILABLE.defaultMessage();
-
     /** 원장이 이 Mock 의 것인지 확인하려고 부하 직전에 넣는 등록의 키 접두사. 원장에서 눈으로 가려내는 표식이다. */
     public static final String CANARY_PREFIX = "canary-";
 
@@ -288,11 +291,17 @@ public final class LoadReport {
                         Duration launchLag, RegistrationSnapshot db, String dbError, Canary canary) {
     }
 
-    /** 주입 실패가 아닌 5xx. 0 이어야 한다. */
+    /**
+     * 주입 실패가 아닌 5xx. 0 이어야 한다 — 교착 · 재시도 상한 · 대기 중 중단 같은 Mock 의 진짜 오류다. 예전에는 모두
+     * "5%" 에 섞여 들어갔다(리뷰 H3 ④).
+     *
+     * <p><b>주입 표식 헤더로 가른다.</b> 예전에는 응답 문구(주입 실패의 {@code errorMessage})로 갈랐는데, MIXED 의 본문 없는
+     * 500 · HTML 502~504 는 문구가 없어 주입인데도 진짜 오류로 셌다(NV-312). 표식은 주입한 실패에만 붙는다.
+     */
     public long nonInjectedServerErrors() {
         return all().stream()
                 .filter(a -> a.outcome() == Outcome.TRANSIENT_FAILURE)
-                .filter(a -> !INJECTED_FAILURE_MESSAGE.equals(a.detail()))
+                .filter(a -> a.injectedFailure() == null)
                 .count();
     }
 
@@ -321,7 +330,9 @@ public final class LoadReport {
         int sent = plan.totalRequests();
         int unknown = counts.get(Outcome.UNKNOWN);
         int notSent = counts.get(Outcome.NOT_SENT);
-        boolean http5xx = "HTTP_5XX".equals(f.failureMode());
+        // MIXED 도 HTTP_5XX 와 같은 규칙이다 — 둘 다 커밋 전에 응답(5xx)을 돌려주는 실패라 결과 불명이 없어야 하고,
+        // 5xx 가 실패율만큼 나와야 한다. 응답 모양(본문 없음 · HTML)만 다르다
+        boolean http5xx = "HTTP_5XX".equals(f.failureMode()) || "MIXED".equals(f.failureMode());
         boolean lateCommit = f.injected().tailOverTimeout(plan.responseTimeout());
         RegistrationSnapshot db = f.db();
         List<Verdict.Check> checks = new ArrayList<>();
@@ -563,9 +574,10 @@ public final class LoadReport {
         Map<String, Integer> details = notAcceptedByDetail();
         if (!details.isEmpty()) {
             out.append("## 접수되지 않은 요청의 상세\n\n");
-            out.append("5xx 는 응답의 `errorMessage`, 응답을 못 받은 것은 예외 종류다. 주입 실패(`")
-                    .append(INJECTED_FAILURE_MESSAGE).append("`)가 아닌 5xx 는 Mock 의 진짜 오류이고, ")
-                    .append("예외 종류는 원인을 Mock 과 PC 중 어디서 찾을지 가른다.\n\n");
+            out.append("`주입 …` 은 Mock 이 일부러 낸 실패(표식 헤더 `")
+                    .append(DefaultFailureInjector.INJECTED_FAILURE_HEADER)
+                    .append("`)이고, 나머지 5xx 는 응답의 `errorMessage` 로 Mock 의 진짜 오류다. 응답을 못 받은 것은 ")
+                    .append("예외 종류이며 원인을 Mock 과 PC 중 어디서 찾을지 가른다.\n\n");
             out.append("| 분류 · 상세 | 건수 |\n| --- | --- |\n");
             details.forEach((detail, count) ->
                     out.append("| ").append(detail).append(" | ").append(count).append(" |\n"));
