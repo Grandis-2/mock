@@ -1,7 +1,9 @@
 package com.grandis.nova.mockapi.registration.domain;
 
 import jakarta.persistence.LockModeType;
+import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -28,4 +30,12 @@ public interface RegistrationRepository extends JpaRepository<Registration, Stri
     Optional<Registration> findByKeyForShare(String externalKey);
 
     Optional<Registration> findByExternalNumber(String externalNumber);
+
+    /**
+     * 목록 조회 한 페이지. 외부 키가 {@code after} 보다 큰 행을 키 순서로 {@code limit} 건까지 읽는다. 잠그지 않는다.
+     *
+     * <p>키는 PK 라 인덱스 범위 읽기 하나다. 키 컬럼이 {@code utf8mb4_bin} 이라 순서는 바이트 순서 — 영문 · 숫자 ·
+     * {@code . _ -} 로만 된 키라 자바 {@code String.compareTo} 순서와 같다.
+     */
+    List<Registration> findByExternalKeyGreaterThanOrderByExternalKeyAsc(String after, Limit limit);
 }
