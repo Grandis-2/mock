@@ -45,8 +45,8 @@ public final class LoadTestMain {
     /**
      * 등록 원장을 직접 읽는 곳의 기본값. {@code application.yml.example} 과 같다.
      *
-     * <p>Mock 은 대조용 목록 API 를 두지 않으므로(요구사항 2.3 · 팀 결정) 스키마를 읽기 전용으로
-     * 조회한다.
+     * <p>목록 API 가 있어도 시험 대상(Mock)의 응답에 기대지 않고 원장 자체를 보려고 스키마를 읽기 전용으로
+     * 조회한다. 이유는 {@link RegistrationSnapshot} 에 적었다.
      *
      * <p><b>부하를 쏘는 쪽과 Mock 이 다른 장비면 반드시 인자로 넘겨야 한다.</b> 합의 조건 1번이
      * 장비 분리인데, 기본값의 {@code localhost} 는 부하를 쏘는 장비를 가리켜 원장이 비어 보이고

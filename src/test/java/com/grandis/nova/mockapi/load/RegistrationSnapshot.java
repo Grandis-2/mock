@@ -17,9 +17,11 @@ import java.util.Map;
  * "건수 합계만 비교하지 않음" 으로 정했고, 실제로 201 키 하나가 빠지고 5xx 키 하나가 들어가도
  * 개수는 같다. 키로 맞춰야 그 뒤집힘이 드러난다.
  *
- * <p>Mock 은 대조용 목록 API 를 두지 않는다(요구사항 2.3 · 팀 결정). 그래서 {@code external_mock}
- * 스키마를 <b>읽기 전용으로</b> 직접 조회한다. 새 의존성은 필요 없다 — MySQL 드라이버가
- * {@code runtimeOnly} 라 Gradle 이 시험 런타임에 물려준다.
+ * <p><b>왜 목록 API 가 아니라 DB 인가.</b> 목록 API({@code GET /external/reservations})는 정합성
+ * 검사용이다. 하네스는 Mock 을 채점하는 쪽이라 시험 대상(Mock)의 응답에 기대지 않고 원장 자체를 본다 —
+ * API 로 읽으면 Mock 의 버그가 판정에도 같이 숨는다. 그래서 {@code external_mock} 스키마를
+ * <b>읽기 전용으로</b> 직접 조회한다. 새 의존성은 필요 없다 — MySQL 드라이버가 {@code runtimeOnly} 라
+ * Gradle 이 시험 런타임에 물려준다.
  *
  * <p>판정은 이 맵을 받아 {@link LoadReport} 가 한다. DB 접속과 판정을 한 클래스에 두면
  * 판정 로직을 DB 없이 확인할 수 없게 된다.
