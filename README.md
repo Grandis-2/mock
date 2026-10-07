@@ -37,11 +37,12 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 **Docker 가 켜져 있어야 MySQL 시험(Testcontainers)까지 돈다.** 꺼져 있으면 그 시험만 조용히 건너뛰고
 빌드는 초록색이다. 동시성을 건드렸으면 결과에서 건너뜀이 0 인지 본다.
 
-## API — 8개
+## API — 9개
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | POST | `/external/reservations` | 예약 등록 (멱등) |
+| GET | `/external/reservations` | 원장 목록 조회 (정합성 검사용, 외부 키 커서 페이지) |
 | GET | `/external/reservations/{externalNumber}` | 번호로 단건 조회 |
 | GET | `/external/reservations/by-key/{externalKey}` | 키로 등록 상태 조회 |
 | POST | `/external/cancellations` | 예약 취소 |
@@ -58,7 +59,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 - 요청 본문에 계약에 없는 필드가 있으면 400 이다
 - 지연 · 실패는 등록에만 주입한다. 조회 · 취소 · 설정에는 없어서 실패율 100% 에서도 되돌릴 수 있다
 - **프로세스 1개로 띄운다.** 설정 · 결함이 메모리라 2개 이상이면 갈린다
-- 정합성 검사는 API 가 아니라 `external_mock` 스키마를 읽기 전용으로 직접 조회한다
+- 정합성 검사는 `external_mock` 스키마를 직접 조회하지 않고 원장 목록 조회 API 로 읽는다
 
 ## 문서
 

@@ -117,6 +117,9 @@ class RegistrationConcurrencyTest {
     @Autowired
     private CancellationService cancellations;
 
+    @Autowired
+    private RegistrationReader reader;
+
     @MockitoSpyBean
     private ExternalNumberGenerator numbers;
 
@@ -356,6 +359,33 @@ class RegistrationConcurrencyTest {
                 .andReturn().getResponse().getStatus()).isEqualTo(404);
         assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
                 .andReturn().getResponse().getStatus()).isEqualTo(200);
+    }
+
+    /**
+     * 목록 조회의 순서와 커서 경계는 키 컬럼 콜레이션({@code utf8mb4_bin}, 바이트 순서)에 달려 있어 H2 로는 증명할 수
+     * 없다. 서버 기본 콜레이션은 대소문자를 무시하는 {@code utf8mb4_0900_ai_ci} 로 띄웠으므로, 컬럼 콜레이션이 빠지면
+     * {@code A} 와 {@code a} 가 붙거나 순서가 바뀌어 여기서 깨진다.
+     *
+     * <p>키에 쓸 수 있는 글자는 바이트 순서로 {@code -} {@code .} 숫자 대문자 {@code _} 소문자다. 접두어 뒤에 한 글자씩
+     * 붙여 섞어 넣고, 접두어를 커서로 주면 내 행부터 나온다 — 접두어보다 크고 내 첫 키({@code -})보다 작은 키는 없다.
+     */
+    @Test
+    @DisplayName("목록 조회는 MySQL 에서 바이트 순서로 넘기고, 받은 커서 자신은 다음 페이지에 다시 나오지 않는다")
+    void listPagesInBinaryKeyOrder() {
+        String prefix = "order-" + UUID.randomUUID() + "x";
+        for (String suffix : new String[]{"a", "_", "0", "A", ".", "-"}) {
+            repository.saveAndFlush(Registration.cancelMarker(prefix + suffix, Instant.parse("2026-10-07T00:00:00Z")));
+        }
+
+        RegistrationPage first = reader.findPage(prefix, 3);
+        assertThat(first.items()).extracting(Registration::externalKey)
+                .containsExactly(prefix + "-", prefix + ".", prefix + "0");
+        assertThat(first.nextCursor()).isEqualTo(prefix + "0");
+
+        RegistrationPage second = reader.findPage(first.nextCursor(), 3);
+        assertThat(second.items()).extracting(Registration::externalKey)
+                .startsWith(prefix + "A", prefix + "_", prefix + "a")
+                .doesNotContain(prefix + "0");
     }
 
     /**
