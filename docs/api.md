@@ -3,10 +3,10 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.14 / 2026-10-07 (원장 목록 조회 `GET /external/reservations` 추가 — 정합성 검사용. 5.13: 실패 모드 `MIXED`) |
+| 버전 / 작성일 | 5.15 / 2026-10-08 (`customerRef` · `itemCode` 를 소문자 표준 UUID 로 — be 의 id UUID 전환. 5.14: 원장 목록 조회 `GET /external/reservations`) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 9개 |
-| 기준 | 원장 · 응답은 ERD v14.1 (2026-10-06) 의 `external_mock` 영역 — 칸 · 제약은 v5(2026-09-17)와 같다. 요청 본문은 본 서비스(preorder)의 `RegisterRequestPayload` · `CancelRequestPayload` (be 결정, 2026-10-06) |
+| 기준 | 원장 · 응답은 ERD v14.1 (2026-10-06) 의 `external_mock` 영역 — 칸 · 제약은 v5(2026-09-17)와 같고, `customer_id` · `product_id` 만 be 의 id UUID 전환(NV-326)을 따라 `BINARY(16)` 이다(ERD 는 `BIGINT`). 요청 본문은 본 서비스(preorder)의 `RegisterRequestPayload` · `CancelRequestPayload` (be 결정, 2026-10-06) |
 
 **이 문서가 Mock API 계약의 정본이다.** 계약을 바꾸려면 이 파일을 고치는 PR 로 하고, 구현과 다르면 둘 중 하나가 버그다.
 
@@ -117,7 +117,7 @@ Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RE
 | 필수 값 누락 | `optionCode 은(는) 필수입니다.` |
 | 타입이 다른 값 | `customerRef 값의 형식이 올바르지 않습니다.` |
 | 같은 필드 두 번 | `customerRef 필드가 두 번 왔습니다.` |
-| 길이 · 범위 · 형식 | `optionCode 은(는) 80자 이하여야 합니다.` · `customerRef 은(는) 0 으로 시작하지 않는 1~18자리 숫자여야 합니다.` · `qty 은(는) 1 이어야 합니다.` · `Idempotency-Key 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다.` |
+| 길이 · 범위 · 형식 | `optionCode 은(는) 80자 이하여야 합니다.` · `customerRef 은(는) 소문자 표준 UUID(8-4-4-4-12)여야 합니다.` · `qty 은(는) 1 이어야 합니다.` · `Idempotency-Key 은(는) 영문 · 숫자 · . _ - 로 된 1~100자여야 합니다.` |
 | 본문 키 ≠ 헤더 키 | `ourReservationId 가 Idempotency-Key 와 다릅니다.` |
 | 필수 헤더 누락 | `Idempotency-Key 헤더가 필요합니다.` |
 | `Content-Type` | `Content-Type 이 application/json 이어야 합니다. 받은 값: application/*` |
@@ -174,13 +174,13 @@ ERD 의 `preorder_token` 은 `char(36)` UUID 이며 "공개 UUID 이자 외부 M
 
 | 원장 칸 (ERD) | 요청 필드 | 바꾸는 법 |
 | --- | --- | --- |
-| `customer_id` | `customerRef` | 숫자로. **0 으로 시작하지 않는 1~18자리 숫자만** 받는다 |
-| `product_id` | `itemCode` | 숫자로. 같은 규칙 |
+| `customer_id` | `customerRef` | UUID 로(`BINARY(16)`). **소문자 표준 UUID(`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)만** 받는다 |
+| `product_id` | `itemCode` | UUID 로. 같은 규칙 |
 | `sku` | `optionCode` | 그대로 |
 
 ERD 에서 `request_hash` 를 제거했으므로 지문 대신 칼럼을 본다. 신청 내용이 이미 행에 남아 있고, 어느 필드가 달라 거절됐는지 응답에 담을 수 있다. **거절 문장에는 요청 필드 이름**(`customerRef` · `itemCode` · `optionCode`)을 쓴다 — 보낸 쪽이 자기 본문에서 찾을 수 있어야 한다.
 
-- **앞에 0 이 붙은 참조는 400 이다.** `"01001"` 을 받아 1001 로 바꾸면 `"1001"` 과 조용히 같은 신청이 된다. 숫자가 아닌 값(`"C-1001"`)과 19자리 이상(`long` 범위를 넘을 수 있음)도 400 이다. 본 서비스는 `String.valueOf(id)` 로 보내므로 걸리지 않는다.
+- **대문자 · 다른 표기의 UUID 는 400 이다.** 대문자 · 하이픈 없음 · 중괄호 · `urn:uuid:` 표기는 보낸 쪽의 버그다. 정규화해 받으면 그 버그가 조용히 같은 신청으로 묻히므로 400 으로 드러낸다. 예전 숫자 id(`"1001"`)도 400 이다. 본 서비스는 `UUID.toString()` 으로 보내므로 걸리지 않는다. 받은 값은 응답에 같은 글자로 나간다.
 - **`qty` · `scope` 는 저장 · 비교하지 않는다**(ERD 에 칸 없음). 사전예약은 수량 1 고정이라 `qty` 는 1 만 받고, 그 밖은 같은 키 · 다른 내용(422)이 아니라 잘못된 요청(400)이다. **`scope` 는 비교하지 않으므로 같은 키로 `scope` 만 달라도 재생된다.**
 - `ourReservationId` 는 키와 같은 값이라 비교 대상이 아니다. 다르면 처리 전에 400 이다.
 
@@ -188,14 +188,14 @@ ERD 에서 `request_hash` 를 제거했으므로 지문 대신 칼럼을 본다.
 
 ## 등록 자원의 필드
 
-ERD v14.1 `external_mock.preorder_registrations` 와 1:1 이다. 응답 · 조회는 이 이름으로 나간다.
+ERD v14.1 `external_mock.preorder_registrations` 와 칸이 1:1 이다(`customer_id` · `product_id` 만 타입이 UUID 로 다르다 — 「기준」). 응답 · 조회는 이 이름으로 나간다.
 
 | 필드 | 타입 | ERD 칸 | 설명 |
 | --- | --- | --- | --- |
 | `externalKey` | string | `external_key` (PK) | 우리 `preorders.preorder_token`. 등록 본문의 `ourReservationId` 와 같은 값 |
 | `externalNumber` | string | `external_number` (UNIQUE) | Mock 이 최초 등록에서 발급. 등록 전 취소 표식이면 `null` |
-| `customerId` | integer | `customer_id` | 우리 `customers.id`. 요청의 `customerRef` 를 숫자로 바꾼 값. 물리 FK 없음 |
-| `productId` | integer | `product_id` | 우리 `products.id`. 요청의 `itemCode` |
+| `customerId` | string (UUID) | `customer_id` | 우리 `customers.id`. 요청의 `customerRef` 와 같은 글자. 물리 FK 없음 |
+| `productId` | string (UUID) | `product_id` | 우리 `products.id`. 요청의 `itemCode` |
 | `sku` | string | `sku` | 우리 `product_options.sku`. 요청의 `optionCode` |
 | `status` | string | `status` | `ACTIVE` / `CANCELED` |
 | `confirmedAt` | datetime | `confirmed_at` | 등록을 확정한 시각 |
@@ -268,8 +268,8 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | `ourReservationId` | string | 필수 | 우리 `preorder_token`. **`Idempotency-Key` 헤더와 같아야 한다** — 다르면 400(어느 키로도 저장하지 않음) |
-| `customerRef` | string | 필수 | `customers.id` 문자열 → `customer_id`. **0 으로 시작하지 않는 1~18자리 숫자** |
-| `itemCode` | string | 필수 | `products.id` 문자열 → `product_id`. 같은 규칙 |
+| `customerRef` | string | 필수 | `customers.id`(UUID) 문자열 → `customer_id`. **소문자 표준 UUID** |
+| `itemCode` | string | 필수 | `products.id`(UUID) 문자열 → `product_id`. 같은 규칙 |
 | `optionCode` | string | 필수 | `product_options.sku` → `sku`. `maxLength=80` |
 | `qty` | integer | 필수 | 수량. **1 만** 받는다. 저장하지 않는다 |
 | `scope` | string | 필수 | 요청 범위. 지금은 `preorder`. `maxLength=50`. 저장 · 비교하지 않는다 |
@@ -277,8 +277,8 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 ```json
 {
   "ourReservationId": "9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
-  "customerRef": "1001",
-  "itemCode": "12",
+  "customerRef": "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d",
+  "itemCode": "0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e",
   "optionCode": "SM-G999-256-BLK",
   "qty": 1,
   "scope": "preorder"
@@ -323,8 +323,8 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 {
   "externalKey": "9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
   "externalNumber": "R-20260916-0048213579",
-  "customerId": 1001,
-  "productId": 12,
+  "customerId": "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d",
+  "productId": "0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e",
   "sku": "SM-G999-256-BLK",
   "status": "ACTIVE",
   "confirmedAt": "2026-09-16T10:00:03.412Z",
@@ -336,7 +336,7 @@ Idempotency-Key: 9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
-| 400 | `INVALID_REQUEST` | 필수 값 누락 · 계약에 없는 필드 · 키 길이 · `ourReservationId` ≠ 헤더 키 · 참조가 숫자 형식이 아님 · `qty` ≠ 1 |
+| 400 | `INVALID_REQUEST` | 필수 값 누락 · 계약에 없는 필드 · 키 길이 · `ourReservationId` ≠ 헤더 키 · 참조가 소문자 표준 UUID 가 아님 · `qty` ≠ 1 |
 | 409 | `KEY_CANCELED` | 취소 표식이 있는 키 |
 | **422** | **`KEY_PAYLOAD_MISMATCH`** | **같은 키로 다른 `customerRef`·`itemCode`·`optionCode`** (`scope` 는 비교하지 않음) |
 | 500 | `UPSTREAM_UNAVAILABLE` | `failureMode=HTTP_5XX` 의 주입 실패(MIXED 의 `HTTP_500` 도 같다). 커밋 전 |
@@ -370,7 +370,7 @@ MIXED 의 HTML 본문은 대표 모양이다(장비마다 문구가 달라 정�
 | 같은 키·같은 내용 연속 2회 | 같은 번호. 2회차 `X-Idempotent-Replay: true` |
 | **같은 키·다른 optionCode** | **422 `KEY_PAYLOAD_MISMATCH`. 기존 등록 그대로** |
 | `ourReservationId` 가 헤더 키와 다름 | 400 `INVALID_REQUEST`. 어느 키로도 저장 안 됨 |
-| `customerRef` 가 `"01001"` · `"C-1001"` | 400 `INVALID_REQUEST`. `"1001"` 과 같은 신청으로 보지 않음 |
+| `customerRef` 가 대문자 UUID · 하이픈 없는 표기 · 숫자 `"1001"` | 400 `INVALID_REQUEST`. 소문자 표기와 같은 신청으로 보지 않음(등록된 키에도 422 · 재생이 아님) |
 | `qty` 가 1 이 아님 | 400 `INVALID_REQUEST` (422 아님) |
 | 같은 키 · `scope` 만 다름 | 201 재생 (`scope` 는 비교하지 않음) |
 | 같은 키 동시 10건 | 정확히 1건만 등록. 번호 1개. 9건은 `X-Idempotent-Replay: true` |
@@ -421,7 +421,7 @@ GET /external/reservations?cursor=9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f&size=500
 
 ### 시스템 처리
 
-1. 쿼리 파라미터를 본문처럼 엄격하게 검사한다. **모르는 이름 · 같은 이름 두 번 · 빈 값 · 범위를 벗어난 `size` 는 400.** 모르는 이름을 버리면 `productId=12` 로 거른 줄 알고 전체를 받는다.
+1. 쿼리 파라미터를 본문처럼 엄격하게 검사한다. **모르는 이름 · 같은 이름 두 번 · 빈 값 · 범위를 벗어난 `size` 는 400.** 모르는 이름을 버리면 `productId=…` 로 거른 줄 알고 전체를 받는다.
 2. 외부 키가 `cursor` 보다 큰 행을 키 순서로 `size` 건 읽는다. 잠그지 않는다 — 진행 중인 등록을 기다리지 않고, 목록 읽기가 등록을 막지도 않는다.
 3. 더 남아 있으면 `nextCursor` 에 이 페이지 마지막 행의 키를, 없으면 `null` 을 넣는다. 남은 행이 딱 `size` 건이어도 `null` 이다(빈 페이지를 한 번 더 부르지 않게).
 
@@ -449,8 +449,8 @@ GET /external/reservations?cursor=9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f&size=500
     {
       "externalKey": "9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
       "externalNumber": "R-20260916-0048213579",
-      "customerId": 1001,
-      "productId": 12,
+      "customerId": "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d",
+      "productId": "0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e",
       "sku": "SM-G999-256-BLK",
       "status": "ACTIVE",
       "confirmedAt": "2026-09-16T10:00:03.412Z",
@@ -474,7 +474,7 @@ GET /external/reservations?cursor=9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f&size=500
 | `nextCursor` 를 따라 끝까지 부름 | 모든 행이 키 순서로 한 번씩. 마지막 응답의 `nextCursor` 는 `null` |
 | 취소 표식만 있는 키 | 목록에 나온다(`status` `CANCELED`, 번호 · 상품 필드 `null`) |
 | 실패율 100% | 200 — 지연 · 실패를 적용하지 않는다 |
-| `?productId=12` | 400. 거르지 않고 전체를 주는 일이 없다 |
+| `?productId=<상품 UUID>` | 400. 거르지 않고 전체를 주는 일이 없다 |
 
 ---
 

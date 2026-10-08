@@ -28,6 +28,7 @@ import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import com.grandis.nova.mockapi.registration.RegisterBodies;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
@@ -129,9 +130,9 @@ class RegistrationApiTest {
                 .andExpect(header().string("X-Mock-Config-Version", String.valueOf(version)))
                 .andExpect(jsonPath("$.externalKey").value(key))
                 .andExpect(jsonPath("$.externalNumber", matchesPattern("R-\\d{8}-\\d{10}")))
-                // 응답은 원장(ERD) 이름이다. 요청의 customerRef · itemCode 문자열은 숫자로 바뀌어 있다
-                .andExpect(jsonPath("$.customerId").value(1001))
-                .andExpect(jsonPath("$.productId").value(12))
+                // 응답은 원장(ERD) 이름이다. 요청의 customerRef · itemCode 와 같은 글자의 UUID 로 나간다
+                .andExpect(jsonPath("$.customerId").value(RegisterBodies.CUSTOMER_REF))
+                .andExpect(jsonPath("$.productId").value(RegisterBodies.ITEM_CODE))
                 .andExpect(jsonPath("$.sku").value("SM-G999-256-BLK"))
                 // qty · scope 는 저장하지 않으므로 응답에도 없다
                 .andExpect(jsonPath("$.qty").doesNotExist())
@@ -180,37 +181,46 @@ class RegistrationApiTest {
         String key = newKey();
         register(key);
 
-        register(key, RegisterBodies.of(key, "2002", "SM-G999-512-WHT"))
+        register(key, RegisterBodies.of(key, "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8e", "SM-G999-512-WHT"))
                 .andExpect(jsonPath("$.errorMessage", containsString("customerRef, optionCode 이(가) 다릅니다.")));
     }
 
     /**
-     * 원장 칸이 숫자라 참조 · 코드는 숫자로 바꿔 넣는다. 앞에 0 이 붙은 값을 받아 바꾸면 {@code "1001"} 과 조용히 같은
-     * 신청이 되므로, 바꾸지 않고 400 으로 막는다(같은 키 · 다른 내용의 422 가 아니다). 숫자가 아닌 값 · {@code long}
-     * 범위를 넘을 수 있는 19자리도 같다. 어느 경우도 원장에 남지 않는다.
+     * 참조 · 코드는 소문자 표준 UUID 만 받는다. 대문자나 다른 표기를 받아 정규화하면 같은 UUID 의 다른 표기가 조용히
+     * 같은 신청이 되므로, 바꾸지 않고 400 으로 막는다(같은 키 · 다른 내용의 422 가 아니다). 예전 숫자 id · 16진이 아닌
+     * 글자도 같다. {@code UUID.fromString} 은 {@code "1-1-1-1-1"} 같은 짧은 표기도 받으므로 형식 검사가 먼저 막아야 한다.
+     * 어느 경우도 원장에 남지 않고, 이미 있는 등록도 바뀌지 않는다.
      */
     @Test
-    @DisplayName("참조 · 코드는 0 으로 시작하지 않는 1~18자리 숫자만 - 앞에 0 · 숫자 아님 · 19자리는 400")
-    void referencesMustBeCanonicalNumbers() throws Exception {
+    @DisplayName("참조 · 코드는 소문자 표준 UUID 만 - 대문자 · 다른 표기 · 숫자 id 는 400, 등록된 키에도 422 가 아니다")
+    void referencesMustBeCanonicalUuids() throws Exception {
+        String ref = RegisterBodies.CUSTOMER_REF;
+        String[] rejected = {
+                ref.toUpperCase(Locale.ROOT), ref.replace("-", ""), "{" + ref + "}", "urn:uuid:" + ref, ref + " ",
+                "1-1-1-1-1", ref.substring(0, 35) + "g", "1001", ""};
+
         String key = newKey();
-        for (String ref : new String[]{"01001", "0", "C-1001", "1001 ", "-1", "1".repeat(19), ""}) {
-            register(key, RegisterBodies.of(key, ref, RegisterBodies.OPTION_CODE))
+        for (String bad : rejected) {
+            register(key, RegisterBodies.of(key, bad, RegisterBodies.OPTION_CODE))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
                     .andExpect(jsonPath("$.errorMessage")
-                            .value("customerRef 은(는) 0 으로 시작하지 않는 1~18자리 숫자여야 합니다."));
+                            .value("customerRef 은(는) 소문자 표준 UUID(8-4-4-4-12)여야 합니다."));
         }
-        register(key, RegisterBodies.of(key).replace("\"itemCode\":\"12\"", "\"itemCode\":\"012\""))
+        register(key, RegisterBodies.of(key).replace(RegisterBodies.ITEM_CODE, "12"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage")
-                        .value("itemCode 은(는) 0 으로 시작하지 않는 1~18자리 숫자여야 합니다."));
+                        .value("itemCode 은(는) 소문자 표준 UUID(8-4-4-4-12)여야 합니다."));
         assertThat(repository.findById(key)).isEmpty();
 
-        // 18자리 최댓값은 받는다
-        String max = newKey();
-        register(max, RegisterBodies.of(max, "9".repeat(18), RegisterBodies.OPTION_CODE))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.customerId").value(999_999_999_999_999_999L));
+        // 등록된 키에 같은 UUID 의 대문자 표기가 와도 같은 신청(재생)이나 다른 내용(422)으로 판정하지 않는다
+        String registered = newKey();
+        register(registered).andExpect(status().isCreated());
+        register(registered, RegisterBodies.of(registered, ref.toUpperCase(Locale.ROOT), RegisterBodies.OPTION_CODE))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
+        assertThat(repository.findById(registered)).get()
+                .satisfies(saved -> assertThat(saved.customerId()).hasToString(ref));
     }
 
     /** 사전예약은 수량 1 고정이다. 1 이 아니면 같은 키 · 다른 내용(422)이 아니라 잘못된 요청(400)이다. */
@@ -341,10 +351,11 @@ class RegistrationApiTest {
     @DisplayName("이미 있는 키로 새 등록을 저장하면 덮어쓰지 않고 중복 키로 떨어진다")
     void newRegistrationNeverOverwrites() {
         String key = newKey();
-        repository.saveAndFlush(Registration.active(key, "R-19990101-1000000001", 1L, 1L, "A", Instant.now()));
+        repository.saveAndFlush(Registration.active(key, "R-19990101-1000000001",
+                UUID.randomUUID(), UUID.randomUUID(), "A", Instant.now()));
 
-        assertThatThrownBy(() -> repository.saveAndFlush(
-                Registration.active(key, "R-19990101-1000000002", 2L, 2L, "B", Instant.now())))
+        assertThatThrownBy(() -> repository.saveAndFlush(Registration.active(key, "R-19990101-1000000002",
+                UUID.randomUUID(), UUID.randomUUID(), "B", Instant.now())))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .satisfies(e -> assertThat(DuplicateKey.isCause(e)).isTrue());
 
@@ -469,8 +480,8 @@ class RegistrationApiTest {
         String key = newKey();
 
         register(key, """
-                {"ourReservationId":"%s","customerRef":"1001","itemCode":"12","qty":1,"scope":"preorder"}"""
-                .formatted(key))
+                {"ourReservationId":"%s","customerRef":"%s","itemCode":"%s","qty":1,"scope":"preorder"}"""
+                .formatted(key, RegisterBodies.CUSTOMER_REF, RegisterBodies.ITEM_CODE))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage").value("optionCode 은(는) 필수입니다."));
 
@@ -479,7 +490,7 @@ class RegistrationApiTest {
                 .andExpect(jsonPath("$.errorMessage").value("optionCode 은(는) 80자 이하여야 합니다."));
 
         // 타입을 바꿔 받지 않는다. 받으면 워커의 타입 오류가 Mock 에서는 묻힌다
-        register(key, RegisterBodies.of(key).replace("\"customerRef\":\"1001\"", "\"customerRef\":1001"))
+        register(key, RegisterBodies.of(key).replace("\"" + RegisterBodies.CUSTOMER_REF + "\"", "1001"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorMessage").value("customerRef 값의 형식이 올바르지 않습니다."));
 

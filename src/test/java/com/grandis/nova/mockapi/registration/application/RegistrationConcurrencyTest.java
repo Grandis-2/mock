@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
 import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
@@ -79,7 +80,9 @@ class RegistrationConcurrencyTest {
                     "--character-set-server=utf8mb4",
                     "--collation-server=utf8mb4_0900_ai_ci");
 
-    private static final RegisterCommand COMMAND = new RegisterCommand(1001L, 12L, "SM-G999-256-BLK");
+    private static final RegisterCommand COMMAND = new RegisterCommand(
+            UUID.fromString(RegisterBodies.CUSTOMER_REF), UUID.fromString(RegisterBodies.ITEM_CODE),
+            RegisterBodies.OPTION_CODE);
 
     /** 동시성 버그는 경합에서만 나온다. 한 번 통과는 증명이 아니다(명세: 최소 100회). */
     private static final int ROUNDS = 100;
@@ -237,6 +240,24 @@ class RegistrationConcurrencyTest {
                 "SELECT CAST(confirmed_at AS CHAR) FROM preorder_registrations WHERE external_key = ?",
                 String.class, saved.externalKey());
         assertThat(stored).isEqualTo(DB_DATETIME.format(saved.confirmedAt()));
+    }
+
+    /**
+     * id 두 칸은 {@code BINARY(16)} 이라 사람이 읽거나 be 쪽 값과 맞댈 때 {@code BIN_TO_UUID} 로 푼다. 다른 바이트
+     * 순서(예: 시간 부분을 뒤바꾼 {@code UUID_TO_BIN(u, 1)})로 쓰이면 앱 안에서는 멀쩡하고 DB 에서만 다른 값이 된다.
+     * 그래서 응답이 아니라 DB 의 바이트를 본다.
+     */
+    @Test
+    @DisplayName("DB 의 id 칸은 UUID_TO_BIN(u) 순서다 - BIN_TO_UUID 로 풀면 보낸 글자 그대로")
+    void storesUuidInUuidToBinOrder() {
+        Registration saved = service.register(UUID.randomUUID().toString(), COMMAND).registration();
+
+        var stored = jdbc.queryForMap(
+                "SELECT BIN_TO_UUID(customer_id) AS customer, BIN_TO_UUID(product_id) AS product"
+                        + " FROM preorder_registrations WHERE external_key = ?",
+                saved.externalKey());
+        assertThat(stored.get("customer")).isEqualTo(RegisterBodies.CUSTOMER_REF);
+        assertThat(stored.get("product")).isEqualTo(RegisterBodies.ITEM_CODE);
     }
 
     @Test

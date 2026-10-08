@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import org.springframework.data.domain.Persistable;
 
 /**
@@ -40,11 +41,12 @@ public class Registration implements Persistable<String> {
     @Column(name = "external_number", length = 100)
     private String externalNumber;
 
+    // id 두 칸은 BINARY(16) 이다. Hibernate 의 UUID 기본 매핑이고, 바이트 순서는 UUID_TO_BIN(u) 와 같다(docs/schema.sql).
     @Column(name = "customer_id")
-    private Long customerId;
+    private UUID customerId;
 
     @Column(name = "product_id")
-    private Long productId;
+    private UUID productId;
 
     @Column(name = "sku", length = 80)
     private String sku;
@@ -75,7 +77,7 @@ public class Registration implements Persistable<String> {
     protected Registration() {
     }
 
-    private Registration(String externalKey, String externalNumber, Long customerId, Long productId,
+    private Registration(String externalKey, String externalNumber, UUID customerId, UUID productId,
                          String sku, RegistrationStatus status,
                          Instant confirmedAt, Instant canceledAt) {
         this.externalKey = externalKey;
@@ -89,8 +91,8 @@ public class Registration implements Persistable<String> {
     }
 
     /** 등록 성공 행. */
-    public static Registration active(String externalKey, String externalNumber, Long customerId,
-                                      Long productId, String sku, Instant confirmedAt) {
+    public static Registration active(String externalKey, String externalNumber, UUID customerId,
+                                      UUID productId, String sku, Instant confirmedAt) {
         return new Registration(externalKey, externalNumber, customerId, productId, sku,
                 RegistrationStatus.ACTIVE, confirmedAt, null);
     }
@@ -132,7 +134,7 @@ public class Registration implements Persistable<String> {
      * 이름은 거절 메시지에 그대로 쓰이므로 <b>요청 필드 이름</b>이다(customerRef · itemCode · optionCode).
      * 보낸 쪽이 자기 본문에서 찾을 수 있어야 한다 — 원장 칸 이름으로 알려 주면 그런 필드는 보낸 적이 없다.
      */
-    public List<String> differingFields(Long customerId, Long productId, String sku) {
+    public List<String> differingFields(UUID customerId, UUID productId, String sku) {
         List<String> fields = new ArrayList<>(3);
         if (!Objects.equals(this.customerId, customerId)) {
             fields.add("customerRef");
@@ -163,11 +165,11 @@ public class Registration implements Persistable<String> {
         return externalNumber;
     }
 
-    public Long customerId() {
+    public UUID customerId() {
         return customerId;
     }
 
-    public Long productId() {
+    public UUID productId() {
         return productId;
     }
 

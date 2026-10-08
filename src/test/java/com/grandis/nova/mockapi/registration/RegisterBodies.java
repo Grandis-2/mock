@@ -8,8 +8,9 @@ package com.grandis.nova.mockapi.registration;
  */
 public final class RegisterBodies {
 
-    public static final String CUSTOMER_REF = "1001";
-    public static final String ITEM_CODE = "12";
+    /** 본 서비스가 보내는 모양 그대로 — {@code UUID.toString()}(소문자 표준 표기). */
+    public static final String CUSTOMER_REF = "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d";
+    public static final String ITEM_CODE = "0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e";
     public static final String OPTION_CODE = "SM-G999-256-BLK";
     public static final String SCOPE = "preorder";
 

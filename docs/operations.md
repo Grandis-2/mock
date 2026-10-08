@@ -63,6 +63,12 @@ docker compose up -d      # 처음 뜰 때 docs/schema.sql 이 자동 실행된�
 curl http://localhost:8081/external/config
 ```
 
+**NV-328(원장 `customer_id` · `product_id` 가 BIGINT → BINARY(16)) 이전에 만든 DB 는 그대로 뜨지 않는다.** `schema.sql` 이
+`CREATE TABLE IF NOT EXISTS` 라 옛 표가 남고, `ddl-auto: validate` 가 칸 형 불일치로 기동을 멈춘다. 로컬은 `docker compose down -v` 뒤
+다시 띄우고, 다른 DB 는 표를 비운 뒤 두 칸을 `BINARY(16) NULL` 로 바꾼다(행이 남은 채 바꾸면 오류 없이 쓰레기 값이 된다).
+be 의 UUID 전환(NV-326)과 **같은 때** 바꾼다 — 새 Mock 은 숫자 id 를, 옛 Mock 은 UUID 를 400 으로 거절하므로 한쪽만 바뀐 사이의 등록은
+모두 실패한다. 순서: be 워커 · Mock 정지 → 원장 비우고 칸 변경 → 새 Mock 기동 → be 배포(마이그레이션이 남은 동기화 작업도 비운다) → 워커 재개.
+
 ## 1. Mock 조절 — 지연과 실패율
 
 재기동 없이 바꾼다. 시연 조작 패널이다.
@@ -140,7 +146,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 
 curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-timeout-1' -H 'Content-Type: application/json' \
-  -d '{"ourReservationId":"demo-timeout-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
+  -d '{"ourReservationId":"demo-timeout-1","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 
 curl -i localhost:8081/external/reservations/by-key/demo-timeout-1
 ```
@@ -171,7 +177,7 @@ curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' 
 
 curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-lost-1' -H 'Content-Type: application/json' \
-  -d '{"ourReservationId":"demo-lost-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
+  -d '{"ourReservationId":"demo-lost-1","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 
 curl -i localhost:8081/external/reservations/by-key/demo-lost-1
 ```
@@ -210,13 +216,13 @@ curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' 
 # 워커처럼 5초에 포기한다
 curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-1' -H 'Content-Type: application/json' \
-  -d '{"ourReservationId":"demo-slow-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
+  -d '{"ourReservationId":"demo-slow-1","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 
 curl -i localhost:8081/external/reservations/by-key/demo-slow-1          # 404
 
 curl -i -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-1' -H 'Content-Type: application/json' \
-  -d '{"ourReservationId":"demo-slow-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'         # 재시도
+  -d '{"ourReservationId":"demo-slow-1","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'         # 재시도
 
 # 원래 요청이 깨어날 때까지(처음 등록부터 약 16초) 기다린 뒤
 curl -i localhost:8081/external/reservations/by-key/demo-slow-1
@@ -242,7 +248,7 @@ curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' 
 # 원래 요청 — 결과를 보려고 20초 기다린다(워커라면 5초에 포기). 다른 터미널에서 보내거나 & 로 뒤에 둔다
 curl --max-time 20 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-2' -H 'Content-Type: application/json' \
-  -d '{"ourReservationId":"demo-slow-2","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}' &
+  -d '{"ourReservationId":"demo-slow-2","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}' &
 
 sleep 5
 curl -i localhost:8081/external/reservations/by-key/demo-slow-2          # 404
@@ -571,7 +577,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 ```bash
 curl -i -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-1' -H 'Content-Type: application/json' \
-  -d '{"ourReservationId":"demo-1","customerRef":"1001","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
+  -d '{"ourReservationId":"demo-1","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 ```
 
 **2. 멱등 재생** — 1번과 **똑같은 요청**을 한 번 더 보낸다. 이어서 키로 조회한다.
@@ -595,7 +601,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
   -d '{"registerLatencyMs":500,"failureRate":1.0}'
 curl -i -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-2' -H 'Content-Type: application/json' \
-  -d '{"ourReservationId":"demo-2","customerRef":"1002","itemCode":"12","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
+  -d '{"ourReservationId":"demo-2","customerRef":"0199a3f2-7c4e-7a11-8b2d-3f4e5a6b7c8e","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
 curl -i localhost:8081/external/reservations/by-key/demo-2
 curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
   -d '{"registerLatencyMs":500,"failureRate":0.0}'
