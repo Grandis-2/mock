@@ -45,3 +45,13 @@ src/main/resources/application-*.yml
 ### 로컬 환경 변수 ###
 .env
 !.env.example
+
+### Terraform ###
+# 상태 파일에는 만든 리소스 정보가 들어 있어 커밋하지 않는다. .terraform.lock.hcl 은 커밋한다(프로바이더 버전 고정).
+# *_override.tf 는 Floci 시험용 설정이다. 커밋되면 실제 적용이 Floci 를 향한다.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+*_override.tf
