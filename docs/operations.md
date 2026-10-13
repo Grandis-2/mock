@@ -445,6 +445,8 @@ spring.datasource.hikari.maximum-pool-size: 30
 docker exec nova-mock-mysql mysql -unova -pnova -N -e "select @@innodb_flush_log_at_trx_commit, @@sync_binlog"   # 2 0
 ```
 
+장비 분리 시험으로 비밀번호를 바꿨으면(위 JDBC) 이 명령과 이 문서의 다른 `-unova -pnova` 도 새 계정 · 비밀번호로 바꿔 쓴다.
+
 기본값(1 · 1)으로 돌리면 Docker Desktop 디스크에서 COMMIT 이 평균 29ms · p99 200ms 까지 걸려 풀이 막히고, 결과 불명이
 수천 건 나온다 — 판정이 Mock 이 아니라 디스크를 잰다(load-test.md "재판정에서 드러난 것"). 보고서의 실행 조건에도 이
 설정이 찍히니 거기서 확인할 수 있다. **판정용 로컬 MySQL 에만 해당하고 RDS 는 기본값 그대로다.**
