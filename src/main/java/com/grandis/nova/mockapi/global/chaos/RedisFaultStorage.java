@@ -4,6 +4,8 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -18,8 +20,9 @@ import org.springframework.stereotype.Component;
  * <p><b>꺼내기는 Lua 스크립트로 한 번에 한다.</b> "종류가 맞으면 지우고 돌려준다" 를 나눠 하면 여러 서버가 같은 키의
  * 등록을 동시에 받았을 때 결함이 두 번 발동한다.
  *
- * <p><b>Redis 가 안 되면 꺼내기는 "결함 없음" 으로 넘어간다.</b> 결함은 시험용 장치라, Redis 장애로 등록 자체가
- * 실패하게 두지 않는다. 걸기 · 지우기(결함 API · 초기화)는 실패를 그대로 알린다 — 걸렸다고 믿고 시험하면 안 되므로.
+ * <p><b>Redis 에 닿지 못하면(연결 실패 · 시간 초과) 꺼내기는 "결함 없음" 으로 넘어간다.</b> 결함은 시험용 장치라, Redis
+ * 장애로 등록 자체가 실패하게 두지 않는다. 그 밖의 오류는 버그라 그대로 알린다. 걸기 · 지우기(결함 API · 초기화)도 실패를
+ * 그대로 알린다 — 걸렸다고 믿고 시험하면 안 되므로.
  */
 @Component
 @ConditionalOnProperty(prefix = "mock", name = "shared-state", havingValue = "redis")
@@ -58,7 +61,9 @@ public class RedisFaultStorage implements FaultStorage {
         String value;
         try {
             value = redis.execute(TAKE, List.of(FAULTS_KEY), externalKey, type.name());
-        } catch (RuntimeException e) {
+        } catch (RedisConnectionFailureException | QueryTimeoutException e) {
+            // 닿지 못한 것(연결 실패 · 시간 초과)만 결함 없음으로 넘긴다. 스크립트 오류 같은 버그까지 삼키면 결함이 조용히
+            // 안 걸리는 원인을 찾을 수 없다.
             log.warn("공유 결함 확인 실패 — 결함 없음으로 처리한다 key={} type={}: {}", externalKey, type, e.toString());
             return null;
         }

@@ -209,6 +209,33 @@ class RedisConfigSyncTest {
         assertThat(later.snapshot().failureMode()).isEqualTo(FailureMode.TIMEOUT);
     }
 
+    /**
+     * Redis 가 설정을 잃은 뒤 옛 버전을 아는 서버가 먼저 다시 올리면 Redis 에 옛 설정이 남는다. 더 새 버전을 아는 서버의
+     * 안전망이 그것을 바로잡아야 한다 — 안 그러면 나중에 뜨는 서버가 옛 설정을 받는다.
+     */
+    @Test
+    @DisplayName("옛 버전이 먼저 다시 올라가도 더 새 버전을 아는 서버가 바로잡는다")
+    void newerServerCorrectsStaleRestore() {
+        MockConfigStore a = server();
+        a.update(500, 0.3, FailureMode.HTTP_5XX);
+        a.update(500, 0.4, FailureMode.TIMEOUT);
+
+        // 옛 버전(1)을 아는 서버가 먼저 다시 올린 것과 같다
+        redis.delete(RedisConfigSync.CONFIG_KEY);
+        ConfigSnapshot stale = new ConfigSnapshot(500, 0.3, FailureMode.HTTP_5XX, 0);
+        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "version", "1");
+        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "body",
+                JSON.writeValueAsString(RedisConfigSync.Body.of(stale)));
+        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "appliedAt", Instant.now().toString());
+
+        awaitTrue(() -> "2".equals(redis.opsForHash().get(RedisConfigSync.CONFIG_KEY, "version")),
+                "더 새 버전(2)으로 바로잡지 않았다");
+        MockConfigStore later = server();
+        assertThat(later.snapshot().configVersion()).isEqualTo(2);
+        assertThat(later.snapshot().failureRate()).isEqualTo(0.4);
+        assertThat(later.snapshot().failureMode()).isEqualTo(FailureMode.TIMEOUT);
+    }
+
     /** 알림 순서가 뒤바뀌어 옛 버전이 늦게 와도 설정을 되돌리지 않는다. */
     @Test
     @DisplayName("늦게 온 옛 버전은 받지 않는다")

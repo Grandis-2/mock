@@ -67,9 +67,16 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
             return version
             """, Long.class);
 
-    /** 없을 때만 주어진 버전 그대로 넣는다. Redis 가 설정을 잃었을 때 안전망이 쓴다. 알리지 않는다(바뀐 것이 없으므로). */
+    /**
+     * 없거나 저장된 버전이 더 낮을 때만 주어진 버전 그대로 넣는다. Redis 가 설정을 잃었을 때 안전망이 쓴다. 알리지 않는다 —
+     * 다른 서버들은 이미 그 버전을 알고 있다.
+     *
+     * <p>"없을 때만" 이면 옛 버전을 아는 서버가 먼저 올렸을 때 더 새 버전을 아는 서버가 바로잡지 못해, 나중에 뜨는 서버가 옛
+     * 설정을 받는다.
+     */
     private static final RedisScript<Long> RESTORE = new DefaultRedisScript<>("""
-            if redis.call('EXISTS', KEYS[1]) == 0 then
+            local stored = redis.call('HGET', KEYS[1], 'version')
+            if (not stored) or tonumber(stored) < tonumber(ARGV[1]) then
               redis.call('HSET', KEYS[1], 'version', ARGV[1], 'body', ARGV[2], 'appliedAt', ARGV[3])
               return 1
             end
@@ -134,14 +141,14 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
     /**
      * 안전망. 버전만 읽어 보고 늦었으면 다시 읽는다. Redis 가 잠깐 안 되면 다음 차례에 다시 본다.
      *
-     * <p>설정이 아예 없으면 Redis 가 재시작해 잃은 것이다. 이 서버가 아는 마지막 설정을 그 버전 그대로 다시 올린다 — 다른
-     * 서버들도 같은 버전을 알고 있으므로 아무것도 바뀌지 않고, 다음 변경은 그 위에서 이어진다. 여러 서버가 동시에 올려도
-     * "없을 때만 넣기" 라 한 번만 들어간다.
+     * <p>설정이 없거나 이 서버가 아는 것보다 옛 버전이면 Redis 가 재시작해 잃었거나, 옛 버전을 아는 서버가 먼저 다시 올린
+     * 것이다. 이 서버가 아는 마지막 설정을 그 버전 그대로 다시 올린다 — 다른 서버들도 같은 버전을 알고 있으므로 아무것도
+     * 바뀌지 않고, 다음 변경은 그 위에서 이어진다. 여러 서버가 동시에 올려도 "없거나 더 낮을 때만" 이라 가장 새 버전이 남는다.
      */
     private void catchUp(Consumer<MockConfigStore.Applied> onChange) {
         try {
             Object version = redis.opsForHash().get(CONFIG_KEY, "version");
-            if (version == null) {
+            if (version == null || Integer.parseInt(version.toString()) < knownVersion) {
                 restore();
             } else if (Integer.parseInt(version.toString()) > knownVersion) {
                 reload(onChange);
@@ -158,10 +165,15 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
         }
         redis.execute(RESTORE, List.of(CONFIG_KEY), String.valueOf(last.snapshot().configVersion()),
                 write(last.snapshot()), last.appliedAt().toString());
-        log.warn("공유 설정이 Redis 에 없어 마지막 설정을 다시 올렸다 configVersion={}", last.snapshot().configVersion());
+        log.warn("공유 설정이 Redis 에 없거나 옛것이라 마지막 설정을 다시 올렸다 configVersion={}",
+                last.snapshot().configVersion());
     }
 
-    private void remember(MockConfigStore.Applied applied) {
+    /**
+     * 비교와 기록을 한 번에 한다. 변경(요청 스레드)과 다시 읽기(알림 · 안전망)가 따로 비교하고 따로 쓰면, 5 를 쓴 뒤 4 가
+     * 덮어 아는 버전이 내려간다. {@link #reload} 와 같은 잠금이다.
+     */
+    private synchronized void remember(MockConfigStore.Applied applied) {
         if (applied.snapshot().configVersion() >= knownVersion) {
             knownVersion = applied.snapshot().configVersion();
             knownConfig = applied;
