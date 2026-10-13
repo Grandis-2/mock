@@ -103,11 +103,14 @@ public class MockConfigStore implements ConfigProvider {
 
     /**
      * 다른 서버가 바꾼 설정, 또는 공유 저장소에 쓴 결과를 받는다. 알림 순서가 뒤바뀌어 옛 버전이 늦게 와도
-     * 되돌리지 않는다 — 더 큰 버전만 받는다.
+     * 되돌리지 않는다 — 더 작은 버전은 받지 않는다.
+     *
+     * <p>같은 버전은 받는다. 공유 저장소가 설정을 잃은 틈에 서로 다른 설정이 같은 버전 번호를 가질 수 있는데, 그때
+     * {@link ConfigSync} 가 공유 저장소의 것을 따르라고 넘겨준다. 그렇지 않은 같은 버전은 같은 설정이라 바꿔도 그대로다.
      */
     void accept(Applied incoming) {
         current.updateAndGet(old ->
-                incoming.snapshot().configVersion() > old.snapshot().configVersion() ? incoming : old);
+                incoming.snapshot().configVersion() >= old.snapshot().configVersion() ? incoming : old);
     }
 
     /** 섞을 종류를 고르지 않고 바꾼다. MIXED 면 전부를 섞는다({@link ConfigSnapshot}). */

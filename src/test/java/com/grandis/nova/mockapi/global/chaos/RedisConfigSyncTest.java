@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -134,11 +135,7 @@ class RedisConfigSyncTest {
         MockConfigStore a = server();
 
         // 알림 없이 저장소만 바꾼다 — 다른 서버가 바꾼 뒤 알림이 사라진 것과 같다
-        ConfigSnapshot quiet = new ConfigSnapshot(500, 0.5, FailureMode.HTTP_5XX, 0);
-        redis.opsForHash().increment(RedisConfigSync.CONFIG_KEY, "version", 1);
-        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "body",
-                JSON.writeValueAsString(RedisConfigSync.Body.of(quiet)));
-        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "appliedAt", Instant.now().toString());
+        writeConfig(1, "missed", new ConfigSnapshot(500, 0.5, FailureMode.HTTP_5XX, 0));
 
         awaitVersion(a, 1);
         assertThat(a.snapshot().failureRate()).isEqualTo(0.5);
@@ -222,11 +219,7 @@ class RedisConfigSyncTest {
 
         // 옛 버전(1)을 아는 서버가 먼저 다시 올린 것과 같다
         redis.delete(RedisConfigSync.CONFIG_KEY);
-        ConfigSnapshot stale = new ConfigSnapshot(500, 0.3, FailureMode.HTTP_5XX, 0);
-        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "version", "1");
-        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "body",
-                JSON.writeValueAsString(RedisConfigSync.Body.of(stale)));
-        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "appliedAt", Instant.now().toString());
+        writeConfig(1, "stale", new ConfigSnapshot(500, 0.3, FailureMode.HTTP_5XX, 0));
 
         awaitTrue(() -> "2".equals(redis.opsForHash().get(RedisConfigSync.CONFIG_KEY, "version")),
                 "더 새 버전(2)으로 바로잡지 않았다");
@@ -234,6 +227,31 @@ class RedisConfigSyncTest {
         assertThat(later.snapshot().configVersion()).isEqualTo(2);
         assertThat(later.snapshot().failureRate()).isEqualTo(0.4);
         assertThat(later.snapshot().failureMode()).isEqualTo(FailureMode.TIMEOUT);
+    }
+
+    /**
+     * Redis 가 설정을 잃은 틈에 늦어 있던 서버가 바꾸면, 다른 서버가 아는 것과 같은 버전 번호에 다른 설정이 올라간다. 버전만
+     * 보면 그 서버는 옛 내용을 계속 쓴다. 변경 ID 가 다르면 Redis 를 따라야 한다.
+     */
+    @Test
+    @DisplayName("같은 버전인데 다른 변경이면 모든 서버가 Redis 의 것을 따른다")
+    void sameVersionDifferentChangeFollowsRedis() {
+        MockConfigStore a = server();
+        MockConfigStore b = server();
+        a.update(500, 0.3, FailureMode.HTTP_5XX);
+        awaitVersion(b, 1);
+
+        // 설정을 잃은 Redis 에 다른 서버가 "버전 1" 로 다른 설정을 올린 것과 같다
+        redis.delete(RedisConfigSync.CONFIG_KEY);
+        writeConfig(1, "other-change", new ConfigSnapshot(800, 0.7, FailureMode.TIMEOUT, 0));
+
+        for (MockConfigStore store : List.of(a, b)) {
+            awaitTrue(() -> store.snapshot().failureRate() == 0.7,
+                    "Redis 의 같은 버전 · 다른 설정을 따르지 않았다: " + store.snapshot().failureRate());
+            assertThat(store.snapshot().configVersion()).isEqualTo(1);
+            assertThat(store.snapshot().failureMode()).isEqualTo(FailureMode.TIMEOUT);
+            assertThat(store.snapshot().registerLatencyMs()).isEqualTo(800);
+        }
     }
 
     /** 알림 순서가 뒤바뀌어 옛 버전이 늦게 와도 설정을 되돌리지 않는다. */
@@ -263,6 +281,18 @@ class RedisConfigSyncTest {
             listeners.destroy();
         });
         return new MockConfigStore(PROPERTIES, sync);
+    }
+
+    /**
+     * 다른 서버가 쓴 것처럼 설정을 한 번에 쓴다(HSET 한 명령). 칸을 따로 쓰면 그 사이에 안전망이 끼어 버전과 내용이 다른
+     * 설정에서 온 것으로 섞인다.
+     */
+    private void writeConfig(int version, String changeId, ConfigSnapshot snapshot) {
+        redis.opsForHash().putAll(RedisConfigSync.CONFIG_KEY, Map.of(
+                "version", String.valueOf(version),
+                "changeId", changeId,
+                "body", JSON.writeValueAsString(RedisConfigSync.Body.of(snapshot)),
+                "appliedAt", Instant.now().toString()));
     }
 
     private static void awaitVersion(MockConfigStore store, int version) {
