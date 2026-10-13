@@ -426,7 +426,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | 시나리오 | `baseline` · `latency` · `timeout` · `mixed` · `tail` · `tail-over-timeout` (`mixed` 는 baseline 에서 모드만 MIXED — 2-5. 뒤의 둘은 지연 꼬리 — [load-test.md](load-test.md) "지연 꼬리 시나리오") |
 | 패스 | `classify`(분류 판정 · 타임아웃 5초 = 워커 읽기 타임아웃) · `latency`(지연 판정 · 10초) |
 | 건수 | 생략하면 합의값 5,000 |
-| JDBC | 생략하면 `localhost:3307`. **부하를 쏘는 장비가 Mock 과 다르면 반드시 넣는다.** 로컬 MySQL 은 기본으로 그 PC 에서만 받으므로(`compose.yaml`) Mock 장비의 `.env` 에 `MYSQL_BIND=0.0.0.0` 을 넣고 `docker compose up -d` 로 다시 띄운다. 그때는 `MYSQL_PASSWORD` 를 기본값에서 바꾸고 계정 · 비밀번호 인자도 그 값으로 넣는다 — 같은 망의 누구나 닿기 때문이다. 시험이 끝나면 되돌린다 |
+| JDBC | 생략하면 `localhost:3307`. **부하를 쏘는 장비가 Mock 과 다르면 반드시 넣는다.** 로컬 MySQL 은 기본으로 그 PC 에서만 받으므로(`compose.yaml`) Mock 장비의 `.env` 에 `MYSQL_BIND=0.0.0.0` 을 넣고, `MYSQL_PASSWORD` · `MYSQL_ROOT_PASSWORD` 를 기본값에서 바꾼 뒤 **`docker compose down -v` → `docker compose up -d` 로 DB 를 새로 만든다.** 계정 · 비밀번호는 볼륨을 처음 만들 때만 정해져, 이미 만든 DB 는 `.env` 만 고쳐서는 기본 비밀번호(nova · root) 그대로 같은 망의 누구나 닿는다. 데이터를 남겨야 하면 `ALTER USER` 로 두 계정의 비밀번호를 직접 바꾼다. 계정 · 비밀번호 인자도 새 값으로 넣고, 시험이 끝나면 되돌린다 |
 | `--warmup` | 예열 실행. 보고서 제목과 파일 이름(`warmup-…`)에 표시되고, 판정과 상관없이 0 으로 끝난다 |
 
 **실행 전 준비** — `application.yml` 의 커넥션 풀을 **30 이상**으로 둔다.

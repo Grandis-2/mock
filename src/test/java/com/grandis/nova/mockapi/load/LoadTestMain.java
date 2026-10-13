@@ -51,7 +51,8 @@ public final class LoadTestMain {
      * <p><b>부하를 쏘는 쪽과 Mock 이 다른 장비면 반드시 인자로 넘겨야 한다.</b> 합의 조건 1번이
      * 장비 분리인데, 기본값의 {@code localhost} 는 부하를 쏘는 장비를 가리켜 원장이 비어 보이고
      * 키 대조가 전부 실패로 찍힌다. {@code compose.yaml} 은 기본으로 그 PC 에서만 받으므로, Mock 장비의
-     * {@code .env} 에 {@code MYSQL_BIND=0.0.0.0} 을 넣어 MySQL 을 다시 띄운 뒤 그 장비의 주소를 넣는다.
+     * {@code .env} 에 {@code MYSQL_BIND=0.0.0.0} 을 넣고 비밀번호를 바꿔 DB 를 새로 만든 뒤(절차는
+     * {@code .env.example}) 그 장비의 주소와 새 계정 · 비밀번호를 넣는다.
      */
     private static final String DEFAULT_JDBC_URL =
             "jdbc:mysql://localhost:3307/external_mock?serverTimezone=UTC";
