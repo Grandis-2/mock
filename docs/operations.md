@@ -441,8 +441,9 @@ java -jar build/libs/nova-0.0.1-SNAPSHOT.jar --server.port=8081 --mock.shared-st
 
 **Redis 시간 초과는 꼭 짧게 둔다(`spring.data.redis.timeout: 500ms` · `connect-timeout: 1s`).** redis 모드는 등록마다
 결함을 Redis 에서 꺼내 본다(결함이 없어도 1~2번). Redis 가 멈추면 그 시간만큼 기다린 뒤에야 결함 없음으로 넘어가는데,
-정하지 않으면 Lettuce 기본 60초라 그동안 모든 등록이 멈추고 워커(읽기 5초)에는 Mock 전체가 먹통으로 보인다. 500ms 면
-0.8초 안에 넘어간다(`RedisFaultSharingTest` 의 멈춤 시험). 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
+정하지 않으면 Lettuce 기본 60초라 그동안 모든 등록이 멈추고 워커(읽기 5초)에는 Mock 전체가 먹통으로 보인다. 새 등록
+하나는 결함을 두 번 보므로 시간 초과도 두 번 쌓인다 — 500ms 면 멈춘 Redis 에서 **약 1.1초**(500ms × 2. `RedisFaultSharingTest`
+의 멈춤 시험이 2초 안을 확인한다), 연결부터 안 되면 약 2초(연결 1s × 2)가 더해진다. 둘 다 워커 읽기 5초 안이다. 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
 5대가 1.3GB 로 떴다. **한 PC 에 여러 대는 동작 확인용이다.** CPU · 메모리를 나눠 쓰므로 처리량은 늘지 않는다.
 
 **확인** — 한 대에서 바꾸고 다른 서버를 본다.

@@ -174,9 +174,12 @@ class RedisFaultSharingTest {
      * 연결은 살아 있는데 Redis 가 답하지 않는 경우(멈춤 · 장애 조치 중). 거부와 달리 바로 실패하지 않고 명령 시간 초과까지
      * 기다린다 — 그래서 {@code spring.data.redis.timeout} 을 짧게 둔다. 정하지 않으면 Lettuce 기본 60초라, 등록마다 결함을
      * 꺼내 보는 redis 모드에서는 모든 등록이 그만큼 멈춘다.
+     *
+     * <p>새 등록 하나는 결함을 두 번 본다(느린 성공 · 응답 유실, {@code RegistrationService}). 둘 다 시간 초과되는 경우를
+     * 그 순서대로 재고, 문서(operations.md 2-6 · design.md)에 적은 상한 2초를 확인한다.
      */
     @Test
-    @DisplayName("Redis 가 멈추면 명령 시간 초과(500ms) 안에 결함 없음으로 넘어간다")
+    @DisplayName("Redis 가 멈추면 등록 하나의 결함 확인 두 번이 2초 안에 결함 없음으로 넘어간다")
     void stalledRedisMeansNoFaultWithinTimeout() {
         LettuceConnectionFactory stalling = new LettuceConnectionFactory(
                 new RedisStandaloneConfiguration(REDIS.getHost(), REDIS.getMappedPort(6379)),
@@ -191,15 +194,20 @@ class RedisFaultSharingTest {
 
             REDIS.getDockerClient().pauseContainerCmd(REDIS.getContainerId()).exec();
             long started = System.nanoTime();
+            long waited;
             boolean fired;
             try {
+                waited = store.holdBeforeCommit("stall-1");
                 fired = store.consumeResponseLost("stall-1");
             } finally {
                 REDIS.getDockerClient().unpauseContainerCmd(REDIS.getContainerId()).exec();
             }
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - started);
 
+            // 500ms × 2. 2026-10-13 로컬 세 번 1.11 · 1.11 · 1.14초
+            assertThat(waited).isZero();
             assertThat(fired).isFalse();
-            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+            assertThat(elapsed).isLessThan(Duration.ofSeconds(2));
         } finally {
             stalling.destroy();
         }
