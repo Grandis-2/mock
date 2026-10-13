@@ -74,11 +74,16 @@ mock:
   shared-state: memory
 
 # shared-state: redis 일 때만 쓴다. 로컬은 compose 의 Redis, 운영은 인프라가 주입한다(spring.data.redis.host · port · ssl).
+# timeout · connect-timeout 은 인프라가 넣지 않으므로 운영에도 이 두 줄을 둔다. redis 면 등록마다 결함을 Redis 에서 꺼내
+# 보는데, Redis 가 멈추면 이 시간만큼 기다린 뒤에야 결함 없음으로 넘어간다. 정하지 않으면 Lettuce 기본(명령 60초 · 연결
+# 10초)이라 그동안 모든 등록이 멈추고 워커(읽기 5초)에는 Mock 전체가 먹통으로 보인다.
 # spring:
 #   data:
 #     redis:
 #       host: localhost
 #       port: 6379
+#       timeout: 500ms
+#       connect-timeout: 1s
 
 logging:
   level:

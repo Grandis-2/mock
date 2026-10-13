@@ -433,11 +433,16 @@ docker compose --profile redis up -d     # MySQL + Redis (Redis 는 이 프로�
 ```
 ```bash
 # 터미널마다 포트만 바꾼다 (8081 · 8082 · …)
-java -jar build/libs/nova-0.0.1-SNAPSHOT.jar --server.port=8081 --mock.shared-state=redis
+java -jar build/libs/nova-0.0.1-SNAPSHOT.jar --server.port=8081 --mock.shared-state=redis --spring.data.redis.timeout=500ms
 ```
 
-`application.yml` 에 `mock.shared-state: redis` 와 `spring.data.redis.host · port` 를 적어 두면 인자를 줄일 수 있다(예시
-파일 주석). 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
+`application.yml` 에 `mock.shared-state: redis` 와 `spring.data.redis.host · port · timeout` 을 적어 두면 인자를 줄일 수
+있다(예시 파일 주석).
+
+**Redis 시간 초과는 꼭 짧게 둔다(`spring.data.redis.timeout: 500ms` · `connect-timeout: 1s`).** redis 모드는 등록마다
+결함을 Redis 에서 꺼내 본다(결함이 없어도 1~2번). Redis 가 멈추면 그 시간만큼 기다린 뒤에야 결함 없음으로 넘어가는데,
+정하지 않으면 Lettuce 기본 60초라 그동안 모든 등록이 멈추고 워커(읽기 5초)에는 Mock 전체가 먹통으로 보인다. 500ms 면
+0.8초 안에 넘어간다(`RedisFaultSharingTest` 의 멈춤 시험). 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
 5대가 1.3GB 로 떴다. **한 PC 에 여러 대는 동작 확인용이다.** CPU · 메모리를 나눠 쓰므로 처리량은 늘지 않는다.
 
 **확인** — 한 대에서 바꾸고 다른 서버를 본다.
@@ -456,7 +461,8 @@ curl localhost:8082/external/config      # failureRate 0.3 · 같은 configVersi
 `HGETALL mock:faults`(걸린 결함). 서버 로그에는 다른 서버의 변경을 받을 때 `다른 서버가 바꾼 설정을 반영한다 configVersion=…` 가 남는다.
 
 **운영** — Redis 를 따로 띄우지 않고 be 가 쓰는 Redis 에 붙는다. 인프라 `mock/service.yml` 에 `redis: main` 을 두면 접속
-정보(`spring.data.redis.host · port · ssl`)가 들어온다. 키는 `mock:` 으로 시작해 be 의 키와 섞이지 않는다. 대수(`scaling`)와
+정보(`spring.data.redis.host · port · ssl`)가 들어온다. **시간 초과는 들어오지 않으므로** 인프라의 `mock/application.yml` 에
+`spring.data.redis.timeout` · `connect-timeout` 을 함께 적는다(위). 키는 `mock:` 으로 시작해 be 의 키와 섞이지 않는다. 대수(`scaling`)와
 worker 의 `mock-max-instances`(Mock 대수에 맞춘 동시 호출 상한)는 인프라 담당이 함께 바꾼다.
 
 ## 3. 부하 실행

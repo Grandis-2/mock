@@ -170,6 +170,41 @@ class RedisFaultSharingTest {
         }
     }
 
+    /**
+     * 연결은 살아 있는데 Redis 가 답하지 않는 경우(멈춤 · 장애 조치 중). 거부와 달리 바로 실패하지 않고 명령 시간 초과까지
+     * 기다린다 — 그래서 {@code spring.data.redis.timeout} 을 짧게 둔다. 정하지 않으면 Lettuce 기본 60초라, 등록마다 결함을
+     * 꺼내 보는 redis 모드에서는 모든 등록이 그만큼 멈춘다.
+     */
+    @Test
+    @DisplayName("Redis 가 멈추면 명령 시간 초과(500ms) 안에 결함 없음으로 넘어간다")
+    void stalledRedisMeansNoFaultWithinTimeout() {
+        LettuceConnectionFactory stalling = new LettuceConnectionFactory(
+                new RedisStandaloneConfiguration(REDIS.getHost(), REDIS.getMappedPort(6379)),
+                LettuceClientConfiguration.builder().commandTimeout(Duration.ofMillis(500)).build());
+        stalling.afterPropertiesSet();
+        stalling.start();
+        try {
+            StringRedisTemplate stallingRedis = new StringRedisTemplate(stalling);
+            stallingRedis.afterPropertiesSet();
+            InMemoryFaultStore store = new InMemoryFaultStore(new RedisFaultStorage(stallingRedis));
+            store.inject("stall-1", FaultType.RESPONSE_LOST_AFTER_COMMIT);
+
+            REDIS.getDockerClient().pauseContainerCmd(REDIS.getContainerId()).exec();
+            long started = System.nanoTime();
+            boolean fired;
+            try {
+                fired = store.consumeResponseLost("stall-1");
+            } finally {
+                REDIS.getDockerClient().unpauseContainerCmd(REDIS.getContainerId()).exec();
+            }
+
+            assertThat(fired).isFalse();
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+        } finally {
+            stalling.destroy();
+        }
+    }
+
     /** Mock 서버 한 대. 같은 Redis 를 본다. */
     private InMemoryFaultStore server() {
         return new InMemoryFaultStore(new RedisFaultStorage(redis));
