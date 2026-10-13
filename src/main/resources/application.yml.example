@@ -69,6 +69,16 @@ mock:
   # be 워커의 HTTP 읽기 타임아웃(be worker 설정 read-timeout: 5s). Mock 은 위 규칙을 확인하는 데만 쓴다.
   # 워커 값이 바뀌면 이 줄과 timeout-hold-ms 를 함께 옮긴다.
   worker-read-timeout-ms: 5000
+  # 설정 · 결함을 둘 곳. 한 대면 memory(기본). 여러 대로 띄우면 redis 로 바꾼다 — memory 로 여러 대를 띄우면
+  # 실패율을 바꾼 서버만 바뀐다. redis 면 아래 spring.data.redis 접속 정보가 있어야 한다.
+  shared-state: memory
+
+# shared-state: redis 일 때만 쓴다. 로컬은 compose 의 Redis, 운영은 인프라가 주입한다(spring.data.redis.host · port · ssl).
+# spring:
+#   data:
+#     redis:
+#       host: localhost
+#       port: 6379
 
 logging:
   level:
