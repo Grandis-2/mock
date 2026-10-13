@@ -8,6 +8,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
@@ -95,27 +97,42 @@ class RedisFaultSharingTest {
         assertThat(a.pending("slow-2")).isFalse();
     }
 
-    /** 나눠 꺼내면 같은 키의 동시 등록이 모두 받아 응답이 두 번 유실된다. 그러면 재시도가 저장된 성공에 닿지 못한다. */
+    /**
+     * 나눠 꺼내면 같은 키의 동시 등록이 모두 받아 응답이 두 번 유실된다. 그러면 재시도가 저장된 성공에 닿지 못한다.
+     *
+     * <p>경합은 한 번 통과로 증명되지 않는다(저장소 규칙: 최소 100회). 회차마다 새 키에 걸고 서버 3대에서 동시에 꺼낸다.
+     * 공용 풀은 코어가 적은 CI 에서 동시성이 낮아지므로 꺼내는 수만큼 전용 스레드를 둔다.
+     */
     @Test
-    @DisplayName("여러 서버가 같은 키를 동시에 꺼내도 딱 한 번만 발동한다")
+    @DisplayName("여러 서버가 같은 키를 동시에 꺼내도 딱 한 번만 발동한다 (100회)")
     void concurrentTakeFiresOnce() throws Exception {
         List<InMemoryFaultStore> servers = List.of(server(), server(), server());
-        servers.get(0).inject("race-1", FaultType.RESPONSE_LOST_AFTER_COMMIT);
-        AtomicInteger fired = new AtomicInteger();
-        CountDownLatch go = new CountDownLatch(1);
+        int rounds = 100;
+        int takers = 30;
+        ExecutorService pool = Executors.newFixedThreadPool(takers);
+        try {
+            for (int round = 0; round < rounds; round++) {
+                String key = "race-" + round;
+                servers.get(round % servers.size()).inject(key, FaultType.RESPONSE_LOST_AFTER_COMMIT);
+                AtomicInteger fired = new AtomicInteger();
+                CountDownLatch go = new CountDownLatch(1);
 
-        List<CompletableFuture<Void>> takers = IntStream.range(0, 30)
-                .mapToObj(i -> CompletableFuture.runAsync(() -> {
-                    await(go);
-                    if (servers.get(i % servers.size()).consumeResponseLost("race-1")) {
-                        fired.incrementAndGet();
-                    }
-                }))
-                .toList();
-        go.countDown();
-        CompletableFuture.allOf(takers.toArray(CompletableFuture[]::new)).get();
+                List<CompletableFuture<Void>> attempts = IntStream.range(0, takers)
+                        .mapToObj(i -> CompletableFuture.runAsync(() -> {
+                            await(go);
+                            if (servers.get(i % servers.size()).consumeResponseLost(key)) {
+                                fired.incrementAndGet();
+                            }
+                        }, pool))
+                        .toList();
+                go.countDown();
+                CompletableFuture.allOf(attempts.toArray(CompletableFuture[]::new)).get();
 
-        assertThat(fired).hasValue(1);
+                assertThat(fired).as("회차 %d", round).hasValue(1);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test
