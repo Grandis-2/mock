@@ -46,6 +46,10 @@ public class ResetService {
      * {@link ResetBarrier} 로 감싸, 있으면 409 로 거절하고 이 메서드가 끝날 때까지 새 등록 · 취소를
      * 붙잡아 둔다. 그래서 세는 문장과 지우는 문장 사이에 등록이 커밋되지 않는다.
      *
+     * <p><b>여러 대({@code mock.shared-state=redis})면 이 보장은 초기화를 받은 서버 안에서만이다.</b>
+     * {@link ResetBarrier} 는 서버마다 따로라 다른 서버의 진행 중인 등록은 세지도 막지도 못한다. 그때는 요청이 없을 때만
+     * 초기화한다(api.md {@code POST /external/reset} · operations.md 2-6).
+     *
      * @return 지운 행 수
      */
     @Transactional

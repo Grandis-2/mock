@@ -13,8 +13,8 @@ import org.springframework.validation.annotation.Validated;
 /**
  * 지연·실패 설정의 기본값. 환경변수나 application.yml 로 준다.
  *
- * <p>ERD 가 설정 테이블을 두지 않기로 했으므로 실행 중 변경값은 메모리에만 있고,
- * 재기동하면 여기 값으로 돌아간다.
+ * <p>ERD 가 설정 테이블을 두지 않기로 했으므로 실행 중 변경값은 기본으로 메모리에만 있고,
+ * 재기동하면 여기 값으로 돌아간다. 여러 대로 띄울 때는 {@link #sharedState()} 를 {@code REDIS} 로 둔다.
  *
  * <p>{@code @Validated} 라 범위를 벗어난 값이 있으면 <b>Mock 이 기동하지 않는다.</b> 틀린 값으로
  * 조용히 도는 것보다 낫다.
@@ -74,7 +74,16 @@ public record MockProperties(
          * <p>Mock 은 이 값을 쓰지 않고, 유지 시간이 이보다 충분히 긴지 기동할 때 확인하는 데만 쓴다.
          * 따로 적어 두지 않으면 워커 타임아웃이 바뀌었을 때 유지 시간이 조용히 어긋난다.
          */
-        @Min(1) @DefaultValue("5000") long workerReadTimeoutMs
+        @Min(1) @DefaultValue("5000") long workerReadTimeoutMs,
+
+        /**
+         * 설정 · 결함을 둘 곳. 한 대면 {@code MEMORY}(기본), 여러 대면 {@code REDIS}.
+         *
+         * <p>여러 대를 메모리로 띄우면 실패율을 바꾼 서버만 바뀐다 — 요청이 서버마다 나뉘어 가서 같은 시험인데 서버마다
+         * 다른 실패율로 돈다(2026-10-13 두 대로 확인: 30% 로 바꾼 서버 32%, 그대로인 서버 10%). {@code REDIS} 면
+         * Redis 접속 정보({@code spring.data.redis.*})가 있어야 한다.
+         */
+        @DefaultValue("MEMORY") SharedState sharedState
 ) {
 
     /** 유지 시간이 워커 읽기 타임아웃보다 이만큼은 길어야 한다. 네트워크 · 처리 시간에 따른 경계를 피한다. */

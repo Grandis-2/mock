@@ -58,7 +58,8 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 - 멱등 키는 본 서비스의 `preorder_token` 이다. 대소문자를 구별하고 영문 · 숫자 · `. _ -` 로 된 1~100자다
 - 요청 본문에 계약에 없는 필드가 있으면 400 이다
 - 지연 · 실패는 등록에만 주입한다. 조회 · 취소 · 설정에는 없어서 실패율 100% 에서도 되돌릴 수 있다
-- **프로세스 1개로 띄운다.** 설정 · 결함이 메모리라 2개 이상이면 갈린다
+- 기본은 **1개**로 띄운다(설정 · 결함이 메모리). **여러 대면 `mock.shared-state=redis`** — 설정 · 결함을 Redis 로 나눠
+  한 대에서 바꿔도 모두 바뀐다([operations.md](docs/operations.md) 2-6)
 - 정합성 검사는 `external_mock` 스키마를 직접 조회하지 않고 원장 목록 조회 API 로 읽는다
 
 ## 문서

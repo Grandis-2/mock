@@ -23,6 +23,9 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     runtimeOnly 'com.mysql:mysql-connector-j'
 
+    // 여러 대로 띄울 때(mock.shared-state=redis) 설정 · 결함을 서버끼리 나눈다. 기본(memory)에서는 연결하지 않는다.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
     // H2 는 테스트에서 컨텍스트 로딩 확인용으로만 쓴다.
     // 멱등 등록의 동시성은 잠금과 중복 키 동작에 기대므로 H2 통과가 MySQL 통과를 뜻하지 않는다.
     testRuntimeOnly 'com.h2database:h2'
