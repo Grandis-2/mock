@@ -23,6 +23,9 @@ public interface ConfigSync {
     /**
      * 설정을 바꾸고 다른 서버들에 알린다. {@code next} 의 버전은 보지 않는다 — 공유 저장소가 하나씩 올려 정한다.
      *
+     * <p>{@link MockConfigStore} 는 이 호출과 그 결과의 적용을 <b>이 객체로 잠가</b> 부른다. 구현은 다른 서버의 변경을
+     * {@code onChange} 로 넘길 때 같은 객체로 잠가야 한다 — 그래야 둘이 끼어들지 않는다.
+     *
      * @return 저장된 설정(정해진 버전 포함)
      */
     MockConfigStore.Applied publish(ConfigSnapshot next, Instant appliedAt);

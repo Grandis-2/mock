@@ -83,12 +83,16 @@ public class MockConfigStore implements ConfigProvider {
     public Applied update(int registerLatencyMs, LatencyTail latencyTail, double failureRate,
                           FailureMode failureMode, List<MixedResponse> mixedResponses) {
         if (sync != null) {
-            // 버전은 공유 저장소가 정한다. 0 은 자리만 채운 값이다.
-            ConfigSnapshot next = new ConfigSnapshot(
-                    registerLatencyMs, failureRate, failureMode, 0, latencyTail, mixedResponses);
-            Applied stored = sync.publish(next, now());
-            accept(stored);
-            return stored;
+            // 쓰기와 적용을 다시 읽기(알림 · 안전망)와 같은 잠금으로 묶는다. 그 사이에 다른 서버의 같은 버전 설정이
+            // 적용되면, 뒤이은 적용이 같은 버전이라는 이유로 옛것을 덮는다.
+            synchronized (sync) {
+                // 버전은 공유 저장소가 정한다. 0 은 자리만 채운 값이다.
+                ConfigSnapshot next = new ConfigSnapshot(
+                        registerLatencyMs, failureRate, failureMode, 0, latencyTail, mixedResponses);
+                Applied stored = sync.publish(next, now());
+                accept(stored);
+                return stored;
+            }
         }
         return current.updateAndGet(old -> new Applied(
                 new ConfigSnapshot(
