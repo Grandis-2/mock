@@ -5,13 +5,16 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * 지연·실패 설정을 들고 있는 메모리 보관소.
+ * 지연·실패 설정을 들고 있는 보관소. 요청 처리는 늘 이 메모리 값을 읽는다.
  *
- * <p>ERD 가 설정 테이블을 두지 않기로 했으므로 값은 여기에만 있고, 재기동하면
- * application.yml 의 mock.* 로 돌아간다.
+ * <p>한 대({@code mock.shared-state=memory}, 기본)면 값은 여기에만 있고, 재기동하면 application.yml 의 mock.* 로
+ * 돌아간다. 여러 대({@code redis})면 {@link ConfigSync} 가 서버끼리 나눈다 — 바꾸면 공유 저장소에 쓰고, 다른
+ * 서버가 바꾸면 알림을 받아 여기를 바꾼다. 그때는 재기동해도 공유된 설정이 남는다.
  */
 @Component
 public class MockConfigStore implements ConfigProvider {
@@ -27,14 +30,32 @@ public class MockConfigStore implements ConfigProvider {
 
     private final AtomicReference<Applied> current;
 
-    public MockConfigStore(MockProperties properties) {
-        this.current = new AtomicReference<>(new Applied(
+    /** 여러 대일 때만 있다. 없으면 메모리에서 혼자 버전을 올린다. */
+    private final ConfigSync sync;
+
+    @Autowired
+    public MockConfigStore(MockProperties properties, ObjectProvider<ConfigSync> sync) {
+        this(properties, sync.getIfAvailable());
+    }
+
+    /** @param sync 서버끼리 나누는 길. 한 대면 null */
+    public MockConfigStore(MockProperties properties, ConfigSync sync) {
+        this.sync = sync;
+        Applied defaults = new Applied(
                 new ConfigSnapshot(
                         properties.registerLatencyMs(),
                         properties.failureRate(),
                         properties.failureMode(),
                         0),
-                now()));
+                now());
+        this.current = new AtomicReference<>(defaults);
+        if (sync != null) {
+            // 기동 중에 다른 서버의 알림이 먼저 들어와 더 새 버전을 넣었을 수 있다. 그보다 옛것이면 덮지 않는다.
+            // 같은 0 이면 공유된 쪽을 따른다 — 먼저 뜬 서버가 올린 기본값이 기준이다.
+            Applied shared = sync.start(defaults, this::accept);
+            current.updateAndGet(old ->
+                    shared.snapshot().configVersion() >= old.snapshot().configVersion() ? shared : old);
+        }
     }
 
     /**
@@ -61,6 +82,14 @@ public class MockConfigStore implements ConfigProvider {
      */
     public Applied update(int registerLatencyMs, LatencyTail latencyTail, double failureRate,
                           FailureMode failureMode, List<MixedResponse> mixedResponses) {
+        if (sync != null) {
+            // 버전은 공유 저장소가 정한다. 0 은 자리만 채운 값이다.
+            ConfigSnapshot next = new ConfigSnapshot(
+                    registerLatencyMs, failureRate, failureMode, 0, latencyTail, mixedResponses);
+            Applied stored = sync.publish(next, now());
+            accept(stored);
+            return stored;
+        }
         return current.updateAndGet(old -> new Applied(
                 new ConfigSnapshot(
                         registerLatencyMs,
@@ -70,6 +99,15 @@ public class MockConfigStore implements ConfigProvider {
                         latencyTail,
                         mixedResponses),
                 now()));
+    }
+
+    /**
+     * 다른 서버가 바꾼 설정, 또는 공유 저장소에 쓴 결과를 받는다. 알림 순서가 뒤바뀌어 옛 버전이 늦게 와도
+     * 되돌리지 않는다 — 더 큰 버전만 받는다.
+     */
+    void accept(Applied incoming) {
+        current.updateAndGet(old ->
+                incoming.snapshot().configVersion() > old.snapshot().configVersion() ? incoming : old);
     }
 
     /** 섞을 종류를 고르지 않고 바꾼다. MIXED 면 전부를 섞는다({@link ConfigSnapshot}). */

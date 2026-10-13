@@ -1,0 +1,237 @@
+package com.grandis.nova.mockapi.global.chaos;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.grandis.nova.mockapi.global.config.MockProperties;
+import com.grandis.nova.mockapi.global.config.SharedState;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.function.Supplier;
+import java.util.stream.IntStream;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * Mock 을 여러 대로 띄웠을 때 설정이 서버끼리 맞는지 진짜 Redis 로 본다.
+ *
+ * <p>서버 한 대 = 같은 Redis 를 보는 {@link MockConfigStore} 하나(알림 구독 · 안전망을 각자 갖는다). 2026-10-13 메모리
+ * 모드 두 대로 확인한 문제 — 한 대에서 실패율을 30% 로 바꾸면 그 서버만 바뀐다 — 가 여기서는 없어야 한다.
+ *
+ * <p>Docker 가 없으면 이 시험만 건너뛴다.
+ */
+@Testcontainers(disabledWithoutDocker = true)
+class RedisConfigSyncTest {
+
+    @Container
+    static final GenericContainer<?> REDIS = new GenericContainer<>("redis:8").withExposedPorts(6379);
+
+    private static final MockProperties PROPERTIES =
+            new MockProperties(500, 0.4, 0.05, FailureMode.HTTP_5XX, 7000, 5000, SharedState.REDIS);
+
+    /** 안전망 주기. 운영은 10초지만 시험은 줄인다. */
+    private static final Duration SAFETY = Duration.ofMillis(300);
+
+    /** 알림 · 안전망을 기다리는 한도. 알림은 수 ms, 안전망은 주기 한 번이면 된다. */
+    private static final Duration WAIT = Duration.ofSeconds(5);
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+
+    private final List<AutoCloseable> servers = new ArrayList<>();
+    private LettuceConnectionFactory factory;
+    private StringRedisTemplate redis;
+
+    @BeforeEach
+    void setUp() {
+        factory = new LettuceConnectionFactory(REDIS.getHost(), REDIS.getMappedPort(6379));
+        factory.afterPropertiesSet();
+        factory.start();
+        redis = new StringRedisTemplate(factory);
+        redis.afterPropertiesSet();
+        redis.delete(RedisConfigSync.CONFIG_KEY);
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        Collections.reverse(servers);
+        for (AutoCloseable server : servers) {
+            server.close();
+        }
+        factory.destroy();
+    }
+
+    @Test
+    @DisplayName("한 대에서 실패율을 바꾸면 다른 서버들도 같은 버전 · 같은 값이 된다")
+    void changeReachesOtherServers() {
+        MockConfigStore a = server();
+        MockConfigStore b = server();
+        MockConfigStore c = server();
+
+        MockConfigStore.Applied changed = a.update(500, 0.3, FailureMode.HTTP_5XX);
+
+        assertThat(changed.snapshot().configVersion()).isEqualTo(1);
+        for (MockConfigStore other : List.of(b, c)) {
+            awaitVersion(other, 1);
+            assertThat(other.snapshot().failureRate()).isEqualTo(0.3);
+            assertThat(other.applied().appliedAt()).isEqualTo(changed.appliedAt());
+        }
+    }
+
+    @Test
+    @DisplayName("꼬리 · MIXED 섞을 종류까지 그대로 건너간다")
+    void wholeConfigTravels() {
+        MockConfigStore a = server();
+        MockConfigStore b = server();
+        LatencyTail tail = new LatencyTail(0.02, 3000, 6000);
+
+        a.update(700, tail, 0.1, FailureMode.MIXED, List.of(MixedResponse.HTTP_502, MixedResponse.HTTP_504));
+
+        awaitVersion(b, 1);
+        ConfigSnapshot seen = b.snapshot();
+        assertThat(seen.registerLatencyMs()).isEqualTo(700);
+        assertThat(seen.latencyTail()).isEqualTo(tail);
+        assertThat(seen.failureMode()).isEqualTo(FailureMode.MIXED);
+        assertThat(seen.mixedResponses()).containsExactly(MixedResponse.HTTP_502, MixedResponse.HTTP_504);
+    }
+
+    /**
+     * 한 대가 재기동하면 기본값(5%)이 아니라 다른 서버들과 같은 설정으로 떠야 한다. 기본값으로 뜨면 그 서버만 다른 실패율로
+     * 돌고, 처음 뜬 서버의 기본값을 덮어쓰면 다른 서버들까지 바뀐다.
+     */
+    @Test
+    @DisplayName("나중에 뜬 서버(재기동)는 기본값이 아니라 공유된 설정을 따른다")
+    void restartedServerFollowsSharedConfig() {
+        MockConfigStore first = server();
+        assertThat(first.snapshot().configVersion()).isZero();
+        assertThat(redis.opsForHash().get(RedisConfigSync.CONFIG_KEY, "version")).isEqualTo("0");
+
+        first.update(500, 0.3, FailureMode.TIMEOUT);
+        MockConfigStore restarted = server();
+
+        assertThat(restarted.snapshot().configVersion()).isEqualTo(1);
+        assertThat(restarted.snapshot().failureRate()).isEqualTo(0.3);
+        assertThat(restarted.snapshot().failureMode()).isEqualTo(FailureMode.TIMEOUT);
+    }
+
+    /** 구독이 늦게 붙거나 연결이 잠깐 끊기면 알림을 놓친다. 그래도 안전망 한 주기 안에 맞춰져야 한다. */
+    @Test
+    @DisplayName("알림을 놓쳐도 안전망이 버전을 보고 따라잡는다")
+    void safetyNetCatchesMissedAnnouncement() {
+        MockConfigStore a = server();
+
+        // 알림 없이 저장소만 바꾼다 — 다른 서버가 바꾼 뒤 알림이 사라진 것과 같다
+        ConfigSnapshot quiet = new ConfigSnapshot(500, 0.5, FailureMode.HTTP_5XX, 0);
+        redis.opsForHash().increment(RedisConfigSync.CONFIG_KEY, "version", 1);
+        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "body",
+                JSON.writeValueAsString(RedisConfigSync.Body.of(quiet)));
+        redis.opsForHash().put(RedisConfigSync.CONFIG_KEY, "appliedAt", Instant.now().toString());
+
+        awaitVersion(a, 1);
+        assertThat(a.snapshot().failureRate()).isEqualTo(0.5);
+    }
+
+    /** 버전을 서버마다 올리면 두 서버가 같은 버전에 다른 설정을 갖는다. 공유 저장소가 하나씩 정해야 한다. */
+    @Test
+    @DisplayName("두 서버가 동시에 바꿔도 버전이 겹치지 않고, 끝나면 모두 마지막 설정으로 맞는다")
+    void concurrentChangesGetDistinctVersions() throws Exception {
+        MockConfigStore a = server();
+        MockConfigStore b = server();
+        int perServer = 20;
+        ConcurrentLinkedQueue<Integer> versions = new ConcurrentLinkedQueue<>();
+        CountDownLatch go = new CountDownLatch(1);
+
+        List<CompletableFuture<Void>> writers = List.of(a, b).stream()
+                .map(store -> CompletableFuture.runAsync(() -> {
+                    await(go);
+                    IntStream.range(0, perServer).forEach(i ->
+                            versions.add(store.update(500, i / 100.0, FailureMode.HTTP_5XX)
+                                    .snapshot().configVersion()));
+                }))
+                .toList();
+        go.countDown();
+        CompletableFuture.allOf(writers.toArray(CompletableFuture[]::new)).get();
+
+        assertThat(versions).doesNotHaveDuplicates().hasSize(perServer * 2);
+        int last = perServer * 2;
+        awaitVersion(a, last);
+        awaitVersion(b, last);
+        assertThat(a.snapshot()).isEqualTo(b.snapshot());
+    }
+
+    /** 알림 순서가 뒤바뀌어 옛 버전이 늦게 와도 설정을 되돌리지 않는다. */
+    @Test
+    @DisplayName("늦게 온 옛 버전은 받지 않는다")
+    void olderVersionDoesNotRollBack() {
+        MockConfigStore a = server();
+        a.update(500, 0.3, FailureMode.HTTP_5XX);
+        a.update(500, 0.4, FailureMode.HTTP_5XX);
+
+        a.accept(new MockConfigStore.Applied(new ConfigSnapshot(500, 0.3, FailureMode.HTTP_5XX, 1), Instant.now()));
+
+        assertThat(a.snapshot().configVersion()).isEqualTo(2);
+        assertThat(a.snapshot().failureRate()).isEqualTo(0.4);
+    }
+
+    /** Mock 서버 한 대. 같은 Redis 를 보되 알림 구독 · 안전망은 각자 갖는다. */
+    private MockConfigStore server() {
+        RedisMessageListenerContainer listeners = new RedisMessageListenerContainer();
+        listeners.setConnectionFactory(factory);
+        listeners.afterPropertiesSet();
+        listeners.start();
+        RedisConfigSync sync = new RedisConfigSync(redis, listeners, JSON, SAFETY);
+        servers.add(() -> {
+            sync.destroy();
+            listeners.stop();
+            listeners.destroy();
+        });
+        return new MockConfigStore(PROPERTIES, sync);
+    }
+
+    private static void awaitVersion(MockConfigStore store, int version) {
+        awaitTrue(() -> store.snapshot().configVersion() == version,
+                "configVersion " + version + " 을 기다렸지만 " + store.snapshot().configVersion());
+    }
+
+    private static void awaitTrue(Supplier<Boolean> condition, String message) {
+        long deadline = System.nanoTime() + WAIT.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (condition.get()) {
+                return;
+            }
+            sleep(20);
+        }
+        throw new AssertionError(message);
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+}
