@@ -53,12 +53,27 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
             return redis.call('HMGET', KEYS[1], 'version', 'body', 'appliedAt')
             """, List.class);
 
-    /** 버전을 하나 올려 저장하고 알린다. 정해진 버전을 돌려준다. */
+    /**
+     * 버전을 하나 올려 저장하고 알린다. 정해진 버전을 돌려준다.
+     *
+     * <p>버전은 "저장된 버전과 이 서버가 아는 버전 중 큰 것 + 1" 이다. Redis 가 재시작해 설정을 잃으면 저장된 버전이
+     * 0 부터 다시 시작하는데, 그대로 올리면 다른 서버들이 아는 버전보다 작아 새 설정을 옛것으로 보고 버린다.
+     */
     private static final RedisScript<Long> PUBLISH = new DefaultRedisScript<>("""
-            local version = redis.call('HINCRBY', KEYS[1], 'version', 1)
-            redis.call('HSET', KEYS[1], 'body', ARGV[1], 'appliedAt', ARGV[2])
+            local stored = tonumber(redis.call('HGET', KEYS[1], 'version') or '0')
+            local version = math.max(stored, tonumber(ARGV[4])) + 1
+            redis.call('HSET', KEYS[1], 'version', tostring(version), 'body', ARGV[1], 'appliedAt', ARGV[2])
             redis.call('PUBLISH', ARGV[3], tostring(version))
             return version
+            """, Long.class);
+
+    /** 없을 때만 주어진 버전 그대로 넣는다. Redis 가 설정을 잃었을 때 안전망이 쓴다. 알리지 않는다(바뀐 것이 없으므로). */
+    private static final RedisScript<Long> RESTORE = new DefaultRedisScript<>("""
+            if redis.call('EXISTS', KEYS[1]) == 0 then
+              redis.call('HSET', KEYS[1], 'version', ARGV[1], 'body', ARGV[2], 'appliedAt', ARGV[3])
+              return 1
+            end
+            return 0
             """, Long.class);
 
     private final StringRedisTemplate redis;
@@ -70,6 +85,9 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
 
     /** 마지막으로 반영한 버전. 알림 · 안전망이 같은 버전을 두 번 읽지 않게 한다. */
     private volatile int knownVersion = -1;
+
+    /** 마지막으로 반영한 설정. Redis 가 설정을 잃었을 때 다시 올린다. */
+    private volatile MockConfigStore.Applied knownConfig;
 
     @Autowired
     public RedisConfigSync(StringRedisTemplate redis, RedisMessageListenerContainer listeners, JsonMapper json) {
@@ -90,7 +108,7 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
         List<?> stored = redis.execute(SEED, List.of(CONFIG_KEY),
                 write(defaults.snapshot()), defaults.appliedAt().toString());
         MockConfigStore.Applied current = read(stored);
-        knownVersion = current.snapshot().configVersion();
+        remember(current);
 
         listeners.addMessageListener((message, pattern) -> {
             int announced = Integer.parseInt(new String(message.getBody(), StandardCharsets.UTF_8));
@@ -106,21 +124,47 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
 
     @Override
     public MockConfigStore.Applied publish(ConfigSnapshot next, Instant appliedAt) {
-        Long version = redis.execute(PUBLISH, List.of(CONFIG_KEY), write(next), appliedAt.toString(), CHANNEL);
+        Long version = redis.execute(PUBLISH, List.of(CONFIG_KEY), write(next), appliedAt.toString(), CHANNEL,
+                String.valueOf(Math.max(knownVersion, 0)));
         MockConfigStore.Applied stored = new MockConfigStore.Applied(withVersion(next, version.intValue()), appliedAt);
-        knownVersion = Math.max(knownVersion, version.intValue());
+        remember(stored);
         return stored;
     }
 
-    /** 안전망. 버전만 읽어 보고 늦었으면 다시 읽는다. Redis 가 잠깐 안 되면 다음 차례에 다시 본다. */
+    /**
+     * 안전망. 버전만 읽어 보고 늦었으면 다시 읽는다. Redis 가 잠깐 안 되면 다음 차례에 다시 본다.
+     *
+     * <p>설정이 아예 없으면 Redis 가 재시작해 잃은 것이다. 이 서버가 아는 마지막 설정을 그 버전 그대로 다시 올린다 — 다른
+     * 서버들도 같은 버전을 알고 있으므로 아무것도 바뀌지 않고, 다음 변경은 그 위에서 이어진다. 여러 서버가 동시에 올려도
+     * "없을 때만 넣기" 라 한 번만 들어간다.
+     */
     private void catchUp(Consumer<MockConfigStore.Applied> onChange) {
         try {
             Object version = redis.opsForHash().get(CONFIG_KEY, "version");
-            if (version != null && Integer.parseInt(version.toString()) > knownVersion) {
+            if (version == null) {
+                restore();
+            } else if (Integer.parseInt(version.toString()) > knownVersion) {
                 reload(onChange);
             }
         } catch (RuntimeException e) {
             log.warn("공유 설정 확인 실패 — 다음 차례에 다시 본다: {}", e.toString());
+        }
+    }
+
+    private void restore() {
+        MockConfigStore.Applied last = knownConfig;
+        if (last == null) {
+            return;
+        }
+        redis.execute(RESTORE, List.of(CONFIG_KEY), String.valueOf(last.snapshot().configVersion()),
+                write(last.snapshot()), last.appliedAt().toString());
+        log.warn("공유 설정이 Redis 에 없어 마지막 설정을 다시 올렸다 configVersion={}", last.snapshot().configVersion());
+    }
+
+    private void remember(MockConfigStore.Applied applied) {
+        if (applied.snapshot().configVersion() >= knownVersion) {
+            knownVersion = applied.snapshot().configVersion();
+            knownConfig = applied;
         }
     }
 
@@ -131,7 +175,7 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
         if (version <= knownVersion) {
             return;
         }
-        knownVersion = version;
+        remember(applied);
         onChange.accept(applied);
         log.info("다른 서버가 바꾼 설정을 반영한다 configVersion={} failureRate={} failureMode={}",
                 version, applied.snapshot().failureRate(), applied.snapshot().failureMode());

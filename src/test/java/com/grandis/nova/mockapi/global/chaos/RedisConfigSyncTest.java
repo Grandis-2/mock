@@ -172,6 +172,43 @@ class RedisConfigSyncTest {
         assertThat(a.snapshot()).isEqualTo(b.snapshot());
     }
 
+    /**
+     * Redis 가 재시작해 설정을 잃으면 저장된 버전이 0 부터 다시 시작한다. 그대로 1 을 주면 버전 2 를 아는 다른 서버들이 새
+     * 설정을 옛것으로 보고 버려 서버마다 설정이 갈린다.
+     */
+    @Test
+    @DisplayName("Redis 가 설정을 잃은 뒤에 바꿔도 버전이 거꾸로 가지 않고 다른 서버가 받는다")
+    void versionDoesNotRegressAfterRedisLosesConfig() {
+        MockConfigStore a = server();
+        MockConfigStore b = server();
+        a.update(500, 0.3, FailureMode.HTTP_5XX);
+        a.update(500, 0.4, FailureMode.HTTP_5XX);
+        awaitVersion(b, 2);
+
+        redis.delete(RedisConfigSync.CONFIG_KEY);
+        MockConfigStore.Applied changed = b.update(500, 0.1, FailureMode.HTTP_5XX);
+
+        assertThat(changed.snapshot().configVersion()).isEqualTo(3);
+        awaitVersion(a, 3);
+        assertThat(a.snapshot().failureRate()).isEqualTo(0.1);
+    }
+
+    @Test
+    @DisplayName("Redis 가 설정을 잃으면 안전망이 마지막 설정을 그 버전 그대로 다시 올린다")
+    void safetyNetRestoresLostConfig() {
+        MockConfigStore a = server();
+        a.update(500, 0.3, FailureMode.TIMEOUT);
+
+        redis.delete(RedisConfigSync.CONFIG_KEY);
+
+        awaitTrue(() -> "1".equals(redis.opsForHash().get(RedisConfigSync.CONFIG_KEY, "version")),
+                "안전망이 설정을 다시 올리지 않았다");
+        MockConfigStore later = server();
+        assertThat(later.snapshot().configVersion()).isEqualTo(1);
+        assertThat(later.snapshot().failureRate()).isEqualTo(0.3);
+        assertThat(later.snapshot().failureMode()).isEqualTo(FailureMode.TIMEOUT);
+    }
+
     /** 알림 순서가 뒤바뀌어 옛 버전이 늦게 와도 설정을 되돌리지 않는다. */
     @Test
     @DisplayName("늦게 온 옛 버전은 받지 않는다")
