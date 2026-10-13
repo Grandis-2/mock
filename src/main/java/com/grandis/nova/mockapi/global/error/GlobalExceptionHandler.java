@@ -236,8 +236,10 @@ public class GlobalExceptionHandler {
      */
     private static String describeUnreadable(HttpMessageNotReadableException e) {
         JacksonException cause = findCause(e, JacksonException.class);
-        if (cause instanceof StreamReadException read && read.getOriginalMessage().startsWith("Duplicate")) {
-            Matcher name = QUOTED.matcher(read.getOriginalMessage());
+        // 읽기 오류는 메시지가 없을 수 있다. 여기서 NPE 가 나면 핸들러가 깨져 오류 본문 없는 응답이 나간다.
+        String original = cause instanceof StreamReadException read ? read.getOriginalMessage() : null;
+        if (original != null && original.startsWith("Duplicate")) {
+            Matcher name = QUOTED.matcher(original);
             return name.find() ? name.group(1) + " 필드가 두 번 왔습니다." : "같은 필드가 두 번 왔습니다.";
         }
         if (cause instanceof UnrecognizedPropertyException unknown) {
