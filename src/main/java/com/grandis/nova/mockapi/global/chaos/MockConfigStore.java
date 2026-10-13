@@ -52,9 +52,13 @@ public class MockConfigStore implements ConfigProvider {
         if (sync != null) {
             // 기동 중에 다른 서버의 알림이 먼저 들어와 더 새 버전을 넣었을 수 있다. 그보다 옛것이면 덮지 않는다.
             // 같은 0 이면 공유된 쪽을 따른다 — 먼저 뜬 서버가 올린 기본값이 기준이다.
-            Applied shared = sync.start(defaults, this::accept);
-            current.updateAndGet(old ->
-                    shared.snapshot().configVersion() >= old.snapshot().configVersion() ? shared : old);
+            // 알림 · 안전망의 적용과 같은 잠금이다(update 와 같은 이유) — 같은 버전의 다른 설정이 알림으로 먼저 들어오면
+            // 여기서 읽은 옛것이 버전이 같다는 이유로 덮는다. 지금은 알림 컨테이너가 모든 빈을 만든 뒤에 켜져 생기지 않는다.
+            synchronized (sync) {
+                Applied shared = sync.start(defaults, this::accept);
+                current.updateAndGet(old ->
+                        shared.snapshot().configVersion() >= old.snapshot().configVersion() ? shared : old);
+            }
         }
     }
 
