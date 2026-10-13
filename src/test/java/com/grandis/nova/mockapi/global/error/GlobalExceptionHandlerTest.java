@@ -24,6 +24,8 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.mock.http.MockHttpInputMessage;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,6 +35,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.multipart.MultipartException;
+import tools.jackson.core.JsonParser;
+import tools.jackson.core.exc.StreamReadException;
 
 /**
  * 잘못된 요청이 500 으로 나가지 않는지 본다.
@@ -141,6 +145,20 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.errorCode").value("UPSTREAM_UNAVAILABLE"));
     }
 
+    /**
+     * Jackson 의 읽기 오류는 메시지가 없을 수 있다({@code getOriginalMessage()} 가 null). 중복 필드인지 보려다
+     * 핸들러 안에서 NPE 가 나면 계약 오류 본문 없이 응답이 나가, 워커는 다시 보내도 같은 요청을 재시도하거나
+     * 설정 오류로 읽는다. 원인을 모르는 읽기 오류일 뿐이므로 400 이어야 한다.
+     */
+    @Test
+    @DisplayName("메시지 없는 본문 읽기 오류도 400 INVALID_REQUEST")
+    void unreadableWithoutMessage() throws Exception {
+        mvc.perform(get("/probe/unreadable"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errorMessage", containsString("요청 본문을 읽을 수 없습니다.")));
+    }
+
     /** 경계 없는 multipart 는 핸들러를 찾기 전에 나서 매핑의 consumes 로 막을 수 없다. */
     @Test
     @DisplayName("multipart 를 나누지 못하면 400")
@@ -181,6 +199,10 @@ class GlobalExceptionHandlerTest {
             }
             if ("multipart".equals(key)) {
                 throw new MultipartException("Failed to parse multipart servlet request");
+            }
+            if ("unreadable".equals(key)) {
+                throw new HttpMessageNotReadableException("본문 읽기 실패",
+                        new StreamReadException((JsonParser) null, null), new MockHttpInputMessage(new byte[0]));
             }
             return key;
         }
