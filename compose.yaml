@@ -11,8 +11,11 @@ services:
     image: mysql:8.4
     container_name: ${MYSQL_CONTAINER_NAME:-nova-mock-mysql}
     ports:
-      # 왼쪽만 바꾼다. 컨테이너 안은 3306 으로 고정이고 호스트 포트만 사람마다 갈린다
-      - "${MYSQL_PORT:-3307}:3306"
+      # 왼쪽만 바꾼다. 컨테이너 안은 3306 으로 고정이고 호스트 포트만 사람마다 갈린다.
+      # 기본은 이 PC 에서만(127.0.0.1) 받는다. 계정이 알려진 기본값(nova/nova)이라, 모든 인터페이스에 열면
+      # 같은 망(학교 · 카페 와이파이)의 누구나 원장을 읽고 고칠 수 있다. 부하를 다른 장비에서 쏘는 시험만
+      # .env 의 MYSQL_BIND=0.0.0.0 으로 열고, 그때는 MYSQL_PASSWORD 도 바꾼다(.env.example).
+      - "${MYSQL_BIND:-127.0.0.1}:${MYSQL_PORT:-3307}:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-external_mock}
