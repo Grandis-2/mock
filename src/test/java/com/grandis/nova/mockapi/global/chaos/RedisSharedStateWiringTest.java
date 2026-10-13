@@ -38,6 +38,9 @@ class RedisSharedStateWiringTest {
     private MockConfigStore store;
 
     @Autowired
+    private InMemoryFaultStore faults;
+
+    @Autowired
     private StringRedisTemplate redis;
 
     @Test
@@ -53,5 +56,17 @@ class RedisSharedStateWiringTest {
         assertThat(redis.opsForHash().get(RedisConfigSync.CONFIG_KEY, "version"))
                 .isEqualTo(String.valueOf(before + 1));
         assertThat(store.snapshot().failureRate()).isEqualTo(0.3);
+    }
+
+    @Test
+    @DisplayName("redis 모드면 결함 API 가 쓰는 보관소도 Redis 에 결함을 둔다")
+    void faultsLiveInRedis() {
+        assertThat(context.getBean(FaultStorage.class)).isInstanceOf(RedisFaultStorage.class);
+
+        faults.inject("wiring-1", FaultType.RESPONSE_LOST_AFTER_COMMIT);
+
+        assertThat(redis.opsForHash().hasKey(RedisFaultStorage.FAULTS_KEY, "wiring-1")).isTrue();
+        assertThat(faults.consumeResponseLost("wiring-1")).isTrue();
+        assertThat(redis.opsForHash().hasKey(RedisFaultStorage.FAULTS_KEY, "wiring-1")).isFalse();
     }
 }
