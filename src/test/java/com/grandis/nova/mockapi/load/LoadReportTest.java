@@ -1,0 +1,391 @@
+package com.grandis.nova.mockapi.load;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.grandis.nova.mockapi.global.chaos.LatencyTail;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * 부하 판정의 계산. 하네스는 빌드에서 돌지 않으므로, 판정이 틀려도 여기서 잡지 않으면 아무도 모른다.
+ */
+class LoadReportTest {
+
+    /**
+     * 리뷰 H3 ① — 관측 백분위에서 주입 백분위를 빼면 꼬리를 가린다.
+     *
+     * <p>100건 중 98건은 Mock 이 30ms 를 쓰고, <b>2건은 400ms</b> 를 쓴다. 그런데 그 2건은 지연이
+     * 짧게(300ms) 뽑혀 관측 700ms 로 정상 요청들 사이에 섞인다. 관측 분포의 꼬리는 지연이 길게 뽑힌
+     * 정상 요청들이 차지하므로 "관측 p99 − 주입 p99" 는 30ms 근처로 나온다.
+     */
+    @Test
+    @DisplayName("오버헤드 백분위는 요청마다 뺀 값의 분포에서 뽑는다 — 주입이 짧게 뽑힌 느린 요청을 가리지 않는다")
+    void perRequestOverheadShowsHiddenTail() {
+        var report = new LoadReport();
+        for (int i = 0; i < 98; i++) {
+            long injected = 300 + i * 4;                       // 300 ~ 688ms
+            add(report, "k" + i, injected, injected + 30);
+        }
+        add(report, "slow-1", 300, 700);
+        add(report, "slow-2", 300, 700);
+
+        long oldWay = report.percentile(99).toMillis() - 696;  // 관측 p99 − 주입 분포 p99(300~700 균등)
+        assertThat(oldWay).as("예전 계산은 느린 요청을 못 본다").isLessThan(100);
+
+        assertThat(report.overheadPercentile(95)).isEqualTo(30L);
+        assertThat(report.overheadPercentile(99)).as("요청마다 빼면 꼬리가 보인다").isEqualTo(400L);
+    }
+
+    @Test
+    @DisplayName("헤더를 받은 응답이 없으면 오버헤드는 측정 불가(null) 다 — 0 으로 통과시키지 않는다")
+    void noInjectedHeaderMeansUnmeasured() {
+        var report = new LoadReport();
+        report.add(new LoadReport.Attempt("k", "R-1", Outcome.ACCEPTED, 201, Duration.ofMillis(530)));
+
+        assertThat(report.overheadPercentile(95)).isNull();
+        assertThat(report.respondedWithoutInjected()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("응답이 없는 요청은 오버헤드 분포에 들어가지 않는다")
+    void unansweredExcluded() {
+        var report = new LoadReport();
+        add(report, "ok", 500, 540);
+        report.add(new LoadReport.Attempt("lost", null, Outcome.UNKNOWN, 0, Duration.ofSeconds(5)));
+
+        assertThat(report.overheadPercentile(99)).isEqualTo(40L);
+        assertThat(report.respondedWithoutInjected()).isZero();
+    }
+
+    // ---------------------------------------------------------------- 판정 (리뷰 H3 ③ ④ ⑤)
+
+    private static final String URL = "http://localhost:8081";
+    private static final LoadReport.Canary CANARY = new LoadReport.Canary("canary-1", "R-canary");
+
+    /** 100건 · 실패율 5% 의 정상 실행 — 95건 접수(행 있음), 주입 5xx 5건(행 없음), 확인용 등록 1행. */
+    @Test
+    @DisplayName("정상 실행은 PASS 다")
+    void healthyRunPasses() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 95, 5);
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), http5xx(0.05, rows));
+
+        assertThat(verdict.result()).as(failures(verdict)).isEqualTo(Verdict.Result.PASS);
+    }
+
+    /**
+     * MIXED(NV-312) — 주입 5xx 가 본문 없는 500 · HTML 502~504 로 섞여 문구가 없다. 표식으로 주입을 가르므로 baseline 과
+     * 똑같이 PASS 이고, 실패율 판정에도 다섯 종류가 모두 들어간다. 예전처럼 문구로 갈랐다면 넷이 "주입이 아닌 5xx" 다.
+     */
+    @Test
+    @DisplayName("MIXED — 문구 없는 주입 5xx 도 표식으로 주입으로 센다. 판정은 HTTP_5XX 와 같다")
+    void mixedRunPasses() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        for (int i = 0; i < 95; i++) {
+            add(report, "a" + i, 500, 540);
+            rows.put("a" + i, "R-a" + i);
+        }
+        String[][] mixed = {{"500", "HTTP_500"}, {"500", "HTTP_500_NO_BODY"}, {"502", "HTTP_502"},
+                {"503", "HTTP_503"}, {"504", "HTTP_504"}};
+        for (int i = 0; i < mixed.length; i++) {
+            report.add(new LoadReport.Attempt("m" + i, null, Outcome.TRANSIENT_FAILURE, Integer.parseInt(mixed[i][0]),
+                    Duration.ofMillis(530), 500L, "주입 " + mixed[i][1], mixed[i][1]));
+        }
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), facts("MIXED", 0.05, rows));
+
+        assertThat(report.nonInjectedServerErrors()).isZero();
+        assertThat(verdict.result()).as(failures(verdict)).isEqualTo(Verdict.Result.PASS);
+        assertThat(verdict.checks()).anyMatch(check -> check.name().startsWith("5xx 가 실패율"));
+    }
+
+    /** 표식이 주입의 근거다. 문구가 주입 실패와 같아도 표식이 없으면 Mock 의 진짜 오류(대기 중 중단 등)로 센다. */
+    @Test
+    @DisplayName("표식 없는 5xx 는 문구가 주입과 같아도 주입이 아니다 — FAIL")
+    void unmarkedServerErrorIsNotInjected() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 95, 4);
+        report.add(new LoadReport.Attempt("unmarked", null, Outcome.TRANSIENT_FAILURE, 500,
+                Duration.ofMillis(510), 500L, "외부 시스템을 사용할 수 없습니다."));
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), http5xx(0.05, rows));
+
+        assertThat(report.nonInjectedServerErrors()).isEqualTo(1);
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+    }
+
+    /** 앞 실행이 확인용 등록 직후에 멈췄고 초기화를 빠뜨렸다. 이번 확인용 키가 아니면 남의 행이다. */
+    @Test
+    @DisplayName("이번 실행의 것이 아닌 확인용 행은 우리 키가 아닌 행으로 센다")
+    void staleCanaryIsForeign() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 95, 5);
+        rows.put("canary-old", "R-old");
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), http5xx(0.05, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("우리 키가 아닌 행"));
+    }
+
+    @Test
+    @DisplayName("주입이 아닌 500(처리 못 한 오류)이 하나라도 있으면 FAIL — 5% 에 섞이지 않는다")
+    void unhandledServerErrorFails() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 95, 4);
+        report.add(new LoadReport.Attempt("deadlock", null, Outcome.TRANSIENT_FAILURE, 500,
+                Duration.ofMillis(510), 500L, "Mock 이 처리하지 못한 오류입니다."));
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), http5xx(0.05, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("주입이 아닌 5xx"));
+    }
+
+    /** 1,000건 · 5% 면 99.9% 범위는 27 ~ 73건이다. 100건은 주사위가 설정과 다르게 구른 것이다. */
+    @Test
+    @DisplayName("5xx 가 실패율의 99.9% 범위를 벗어나면 FAIL")
+    void failureRateOutOfRangeFails() {
+        assertThat(LoadReport.failureRateCheck(50, 1000, 0.05).ok()).isTrue();
+        assertThat(LoadReport.failureRateCheck(100, 1000, 0.05).ok()).isFalse();
+        assertThat(LoadReport.failureRateCheck(1, 1000, 0.0).ok()).as("실패율 0 이면 1건도 안 된다").isFalse();
+    }
+
+    /** 리뷰 H3 ⑤ — "끊기 전에 커밋" 회귀. 예전에는 결과 불명이 대조에서 빠져 통과했다. */
+    @Test
+    @DisplayName("timeout — 결과 불명 키가 하나라도 원장에 있으면 FAIL")
+    void timeoutUnknownWithRowFails() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        for (int i = 0; i < 10; i++) {
+            report.add(new LoadReport.Attempt("t" + i, null, Outcome.UNKNOWN, 0, Duration.ofSeconds(5)));
+        }
+        rows.put("t3", "R-leaked");
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 10), timeout(rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("결과 불명 키의 행 0건"));
+    }
+
+    /** 리뷰 H3 ⑤ — JDBC 인자를 빠뜨려 빈 원장을 읽으면 "결과 불명 키의 행 0" 이 저절로 통과한다. */
+    @Test
+    @DisplayName("timeout — 확인용 등록이 원장에 없으면 엉뚱한 DB 다. 판정 불가")
+    void wrongLedgerIsInvalid() {
+        var report = new LoadReport();
+        for (int i = 0; i < 10; i++) {
+            report.add(new LoadReport.Attempt("t" + i, null, Outcome.UNKNOWN, 0, Duration.ofSeconds(5)));
+        }
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 10), timeout(new HashMap<>()));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.INVALID);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("원장이 이 Mock 의 것이다"));
+    }
+
+    @Test
+    @DisplayName("원장 조회가 실패하면 판정 불가이고, 보고서는 그래도 끝까지 나온다")
+    void dbFailureIsInvalidButReported() {
+        var report = new LoadReport();
+        fillHttp5xx(report, new HashMap<>(), 95, 5);
+        var facts = new LoadReport.Facts("HTTP_5XX", 0.05, new InjectedLatency(500, 0.4),
+                Duration.ZERO, null, "SQLException: Communications link failure", CANARY);
+        LoadPlan plan = LoadPlan.classify(URL, 100);
+
+        Verdict verdict = report.judge(plan, facts);
+        String rendered = report.render(plan, "{}", 1, facts, 0.0, 300, Duration.ofSeconds(11), verdict, "판정");
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.INVALID);
+        assertThat(rendered).contains("판정 불가").contains("원장을 읽지 못했다").contains("Communications link failure");
+    }
+
+    @Test
+    @DisplayName("발사가 1초 넘게 밀렸으면 목표 부하를 못 만든 실행이다. 판정 불가")
+    void launchLagIsInvalid() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 95, 5);
+        var facts = new LoadReport.Facts("HTTP_5XX", 0.05, new InjectedLatency(500, 0.4),
+                Duration.ofMillis(1500), snapshot(rows), null, CANARY);
+
+        assertThat(report.judge(LoadPlan.classify(URL, 100), facts).result()).isEqualTo(Verdict.Result.INVALID);
+    }
+
+    /** 지연 판정 패스만 오버헤드를 판정한다. 분류 판정 패스는 타임아웃이 워커 값이라 꼬리가 잘린다. */
+    @Test
+    @DisplayName("지연 판정 패스 — 요청별 p99 오버헤드가 400ms 를 넘으면 FAIL")
+    void latencyPassJudgesOverhead() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        for (int i = 0; i < 100; i++) {
+            long overhead = i < 98 ? 30 : 900;
+            report.add(new LoadReport.Attempt("k" + i, "R-k" + i, Outcome.ACCEPTED, 201,
+                    Duration.ofMillis(500 + overhead), 500L));
+            rows.put("k" + i, "R-k" + i);
+        }
+
+        Verdict classify = report.judge(LoadPlan.classify(URL, 100), http5xx(0.0, rows));
+        Verdict latency = report.judge(LoadPlan.latency(URL, 100), http5xx(0.0, rows));
+
+        assertThat(classify.result()).as("분류 패스는 오버헤드로 실패시키지 않는다").isEqualTo(Verdict.Result.PASS);
+        assertThat(latency.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(latency)).containsExactly("p99 오버헤드 ≤ 400ms");
+    }
+
+    // ---------------------------------------------------------------- 지연 꼬리 (NV-260)
+
+    private static final InjectedLatency OVER_TIMEOUT_TAIL =
+            new InjectedLatency(500, 0.4, new LatencyTail(0.005, 5500, 6500));
+
+    /** 5,000건 · 0.5% 면 99.9% 범위는 8 ~ 42건이다. 25건이 워커 타임아웃 뒤에 커밋됐다. */
+    @Test
+    @DisplayName("tail-over-timeout — 결과 불명이 꼬리 비율만큼이고 그 키가 전부 원장에 있으면 PASS")
+    void lateCommitPasses() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillLateCommit(report, rows, 4_975, 25);
+
+        LoadPlan plan = LoadPlan.classify(URL, 5_000);
+        Verdict verdict = report.judge(plan, lateCommit(0.0, rows));
+
+        assertThat(verdict.result()).as(failures(verdict)).isEqualTo(Verdict.Result.PASS);
+        // 보고서는 몸통만 본 사전 검사와 꼬리를 적고, 넘기는 꼬리를 붙잡히는 요청으로 세어 동시 요청 상한을 낸다
+        // (500 RPS × (0.995 × (472 + 250) + 0.005 × (5000 + 250))ms ≈ 373)
+        String rendered = report.render(plan, "{}", 1, lateCommit(0.0, rows), 0.0, 380, Duration.ofSeconds(17),
+                verdict, "판정");
+        assertThat(rendered)
+                .contains("꼬리 0.5% 5500 ~ 6500ms")
+                .contains("몸통 최대 ")
+                .contains("상한 ~373")
+                .doesNotContain("시나리오가 응답 타임아웃에 걸쳐 있다");
+    }
+
+    /** 늦은 커밋이 일어나지 않았다 — 꼬리에서 기다린 뒤 커밋하지 않고 버렸거나, 기다리는 중에 끊겼다. */
+    @Test
+    @DisplayName("tail-over-timeout — 결과 불명 키 하나라도 원장에 없으면 FAIL")
+    void lateCommitMissingRowFails() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillLateCommit(report, rows, 4_975, 25);
+        rows.remove("late3");
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 5_000), lateCommit(0.0, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).containsExactly("결과 불명 키 전부 원장에 ACTIVE — 워커가 포기한 뒤 커밋된다");
+    }
+
+    /** 몸통 요청까지 결과 불명이 됐다 — 꼬리 탓이 아니라 Mock 이 느리다. */
+    @Test
+    @DisplayName("tail-over-timeout — 결과 불명이 꼬리 비율 범위를 넘으면 FAIL")
+    void lateCommitTooManyUnknownFails() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillLateCommit(report, rows, 4_900, 100);
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 5_000), lateCommit(0.0, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("결과 불명이 꼬리 비율"));
+    }
+
+    /** 꼬리 요청이 주사위에 걸리면 6초 뒤 500 으로 끝나 원장에 없다. "전부 ACTIVE" 를 단정할 수 없는 실행이다. */
+    @Test
+    @DisplayName("tail-over-timeout 을 실패율 0 이 아닌 채로 돌리면 판정 불가")
+    void lateCommitWithFailureRateIsInvalid() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillLateCommit(report, rows, 4_975, 25);
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 5_000), lateCommit(0.05, rows));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.INVALID);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("타임아웃을 넘기는 꼬리는 실패율 0"));
+    }
+
+    /** `tail`(4초까지)은 타임아웃 안이라 기존 규칙 그대로다 — 결과 불명 1건이면 Mock 이 느린 것이다. */
+    @Test
+    @DisplayName("tail — 타임아웃 안의 꼬리는 결과 불명 0 이 그대로 합격 조건이다")
+    void tailWithinTimeoutKeepsZeroUnknown() {
+        var report = new LoadReport();
+        var rows = new HashMap<String, String>(Map.of(CANARY.key(), CANARY.number()));
+        fillHttp5xx(report, rows, 94, 5);
+        report.add(new LoadReport.Attempt("slow", null, Outcome.UNKNOWN, 0, Duration.ofSeconds(5)));
+        var tail = new InjectedLatency(500, 0.4, new LatencyTail(0.02, 2000, 4000));
+
+        Verdict verdict = report.judge(LoadPlan.classify(URL, 100), new LoadReport.Facts("HTTP_5XX", 0.05, tail,
+                Duration.ofMillis(20), snapshot(rows), null, CANARY));
+
+        assertThat(verdict.result()).isEqualTo(Verdict.Result.FAIL);
+        assertThat(failed(verdict)).anyMatch(name -> name.startsWith("결과 불명 ≤"));
+    }
+
+    /** 몸통 요청은 접수(행 있음), 꼬리 요청은 결과 불명이지만 워커가 포기한 뒤 커밋돼 원장에 있다. */
+    private static void fillLateCommit(LoadReport report, Map<String, String> rows, int accepted, int late) {
+        for (int i = 0; i < accepted; i++) {
+            add(report, "a" + i, 500, 540);
+            rows.put("a" + i, "R-a" + i);
+        }
+        for (int i = 0; i < late; i++) {
+            report.add(new LoadReport.Attempt("late" + i, null, Outcome.UNKNOWN, 0, Duration.ofSeconds(5)));
+            rows.put("late" + i, "R-late" + i);
+        }
+    }
+
+    private static LoadReport.Facts lateCommit(double failureRate, Map<String, String> rows) {
+        return new LoadReport.Facts("HTTP_5XX", failureRate, OVER_TIMEOUT_TAIL,
+                Duration.ofMillis(20), snapshot(rows), null, CANARY);
+    }
+
+    private static void fillHttp5xx(LoadReport report, Map<String, String> rows, int accepted, int injectedFailures) {
+        for (int i = 0; i < accepted; i++) {
+            add(report, "a" + i, 500, 540);
+            rows.put("a" + i, "R-a" + i);
+        }
+        for (int i = 0; i < injectedFailures; i++) {
+            report.add(new LoadReport.Attempt("f" + i, null, Outcome.TRANSIENT_FAILURE, 500,
+                    Duration.ofMillis(530), 500L, "주입 HTTP_500", "HTTP_500"));
+        }
+    }
+
+    private static LoadReport.Facts http5xx(double failureRate, Map<String, String> rows) {
+        return facts("HTTP_5XX", failureRate, rows);
+    }
+
+    private static LoadReport.Facts facts(String failureMode, double failureRate, Map<String, String> rows) {
+        return new LoadReport.Facts(failureMode, failureRate, new InjectedLatency(500, 0.4),
+                Duration.ofMillis(20), snapshot(rows), null, CANARY);
+    }
+
+    private static LoadReport.Facts timeout(Map<String, String> rows) {
+        return new LoadReport.Facts("TIMEOUT", 1.0, new InjectedLatency(0, 0.4),
+                Duration.ofMillis(20), snapshot(rows), null, CANARY);
+    }
+
+    private static RegistrationSnapshot snapshot(Map<String, String> rows) {
+        return new RegistrationSnapshot(Map.copyOf(rows), true, Duration.ofSeconds(8));
+    }
+
+    private static List<String> failed(Verdict verdict) {
+        return verdict.checks().stream().filter(c -> !c.ok()).map(Verdict.Check::name).toList();
+    }
+
+    private static String failures(Verdict verdict) {
+        return "실패한 규칙: " + failed(verdict);
+    }
+
+    private static void add(LoadReport report, String key, long injectedMs, long observedMs) {
+        report.add(new LoadReport.Attempt(key, "R-" + key, Outcome.ACCEPTED, 201,
+                Duration.ofMillis(observedMs), injectedMs));
+    }
+}

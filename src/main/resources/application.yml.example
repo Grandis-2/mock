@@ -1,0 +1,78 @@
+# 이 파일을 application.yml 로 복사해 쓴다. application.yml 은 커밋하지 않는다.
+spring:
+  application:
+    name: mock-api
+
+  threads:
+    virtual:
+      # 지연 2000ms 로 부하를 걸면 요청 수천 건이 Mock 안에서 동시에 대기한다.
+      # 블로킹 스레드 풀이면 큐가 밀려 설정값보다 훨씬 큰 지연이 관측되고,
+      # "우리 서버가 느린 것" 과 "Mock 이 느린 것" 을 구분할 수 없게 된다.
+      enabled: true
+
+  datasource:
+    # compose.yaml 로 띄운 로컬 MySQL. 포트는 .env 의 MYSQL_PORT 와 맞춘다(기본 3307).
+    # 본 서비스와 통합할 때는 그쪽 인스턴스 주소로 바꾼다.
+    #
+    # useLocalSessionState=true — 지우지 않는다. 등록 · 취소 · 키 조회는 트랜잭션마다 격리 수준을 정하는데
+    # (코드의 @Transactional), 그때 스프링이 "지금 격리 수준이 뭐냐" 를 묻는 SELECT 가 매번 DB 로 나간다. 이
+    # 옵션이면 드라이버가 기억한 값으로 답해 왕복이 하나 준다(등록 1건당 명령 6 → 5, 2026-10-01 실측).
+    # 그 SELECT 는 0.1ms 짜리라 부하 판정이 흔들린 원인은 아니었다(원인은 MySQL 커밋 동기화 — compose.yaml).
+    # 비용 없이 명령 하나를 줄이니 둔다.
+    url: jdbc:mysql://localhost:3307/external_mock?serverTimezone=UTC&characterEncoding=UTF-8&useLocalSessionState=true
+    # 로컬 compose 기본값이다(.env 의 MYSQL_USER / MYSQL_PASSWORD).
+    # 다른 값을 쓰려면 .env 와 이 파일을 같이 고친다. 한쪽만 바꾸면 접속이 거부된다.
+    username: nova
+    password: nova
+    hikari:
+      # 등록 · 취소 · 키 조회는 코드가 트랜잭션마다 READ COMMITTED 를 정한다(design.md).
+      # 여기 값은 그 밖의 쿼리(초기화 등)의 기본값이다.
+      transaction-isolation: TRANSACTION_READ_COMMITTED
+      # 20 은 500 RPS 에서 병목이었다. 요청이 커넥션을 기다리며 쌓여 최대 동시가 이론값의
+      # 1.6배(baseline 관측 480 / 이론 ~300)까지 올라갔고 p95 오버헤드가 464ms 였다.
+      # 30 으로 올리자 303 · 오버헤드 70ms 로 이론값에 붙었고, 50 과 차이가 없었다.
+      # 통합 때 본 서비스와 MySQL 을 나눠 쓰는 것도 고려한 값이다. (2026-09-28 판정 실측)
+      maximum-pool-size: 30
+
+  jpa:
+    hibernate:
+      # 스키마는 docs/schema.sql 이 정본이다. Hibernate 가 만들면 CHECK 제약이 빠진다.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+    open-in-view: false
+
+server:
+  port: 8081
+  tomcat:
+    # 톰캣 기본값과 같다 — 올린 값이 아니라 한도를 보이려고 적어 둔다.
+    # failureMode=TIMEOUT 과 응답 유실 결함은 응답하지 않고 연결을 붙잡는다. 붙잡는 연결이 이걸 넘으면
+    # 새 연결은 받아지지 않고 기다리다 거절된다.
+    max-connections: 8192
+
+# 지연·실패 설정의 기본값. 실행 중에는 PUT /external/config 로 바꾸고,
+# 재기동하면 이 값으로 돌아간다(ERD: 설정 테이블을 두지 않는다).
+mock:
+  # 평균이다. 실제 대기는 아래 지터만큼 흔들린다 (요구사항: "평균 500ms 지연"). 0 ~ 60000.
+  register-latency-ms: 500
+  # 지연을 흔드는 폭. 실제 대기 = 평균 × (1 ∓ 0.4) 의 균등분포. 0 ~ 1 만 받는다(벗어나면 기동 실패).
+  # 운영 · 시연 · 부하 판정 모두 이 값으로 돈다. 판정은 주입한 지연의 p95 를 계산해 빼낸다.
+  latency-jitter: 0.4
+  # 확률이다. 5% 는 0.05 (5 가 아니다). 0 ~ 1 만 받는다(벗어나면 기동 실패).
+  failure-rate: 0.05
+  failure-mode: HTTP_5XX
+  # TIMEOUT 모드와 결함에서 응답 없이 연결을 유지하는 시간. 워커 읽기 타임아웃 + 2초 이상이어야
+  # 기동한다(docs/api.md). 짧으면 워커가 타임아웃 대신 빈 500 을 받아 결과 불명이 되지 않는다.
+  timeout-hold-ms: 7000
+  # be 워커의 HTTP 읽기 타임아웃(be worker 설정 read-timeout: 5s). Mock 은 위 규칙을 확인하는 데만 쓴다.
+  # 워커 값이 바뀌면 이 줄과 timeout-hold-ms 를 함께 옮긴다.
+  worker-read-timeout-ms: 5000
+
+logging:
+  level:
+    # INFO 가 기본이다. DEBUG 로 내리면 결함 발동("응답을 보내지 않는다") · 클라이언트가 먼저 끊은 요청 ·
+    # 중복 키 재시도가 한 줄씩 찍힌다. 부하 판정에서는 요청마다 찍혀 로그만 수만 줄이 되므로 켜지 않는다.
+    # 잠깐 볼 때는 파일을 고치지 않고 기동 인자로 켠다 — docs/operations.md 0장.
+    com.grandis.nova.mockapi: INFO

@@ -1,0 +1,632 @@
+package com.grandis.nova.mockapi.registration.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+
+import com.grandis.nova.mockapi.global.chaos.FailureInjector;
+import com.grandis.nova.mockapi.global.error.ErrorCode;
+import com.grandis.nova.mockapi.global.error.MockException;
+import com.grandis.nova.mockapi.registration.RegisterBodies;
+import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
+import com.grandis.nova.mockapi.registration.domain.Registration;
+import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mysql.MySQLContainer;
+import org.testcontainers.utility.MountableFile;
+
+/**
+ * 같은 키 동시 요청을 <b>진짜 MySQL</b> 로 본다.
+ *
+ * <p>멱등 등록은 잠금 읽기와 중복 키(1062)에 기댄다. H2 는 둘 다 다르게 동작하므로 여기서 통과해야
+ * 의미가 있다. 키 조회가 진행 중인 등록을 기다리는지, 등록과 취소가 엇갈려도 취소가 이기는지도
+ * 잠금 · 중복 키 동작이라 여기서 본다. 스키마는
+ * {@code docs/schema.sql} 을 그대로 넣는다({@code ddl-auto=validate} 로 엔티티와 맞는지도 확인된다).
+ *
+ * <p><b>서버와 커넥션 풀의 격리 수준은 MySQL 기본값(REPEATABLE READ) 그대로 둔다.</b> RDS 기본값도 RR 이고,
+ * 설정 파일 사본에서 격리 수준이 빠져도 등록이 맞게 돌아야 한다. READ COMMITTED 는 코드(트랜잭션 경계)가 정한다.
+ *
+ * <p>Docker 가 없으면 이 시험만 건너뛴다. 빌드는 막지 않는다.
+ */
+@Testcontainers(disabledWithoutDocker = true)
+@SpringBootTest(properties = {
+        "spring.jpa.hibernate.ddl-auto=validate",
+        "spring.datasource.hikari.maximum-pool-size=20"
+})
+@AutoConfigureMockMvc
+class RegistrationConcurrencyTest {
+
+    @Container
+    @ServiceConnection
+    static final MySQLContainer MYSQL = new MySQLContainer("mysql:8.4")
+            .withDatabaseName("external_mock")
+            .withCopyFileToContainer(
+                    MountableFile.forHostPath("docs/schema.sql"), "/docker-entrypoint-initdb.d/01-schema.sql")
+            .withCommand(
+                    "--character-set-server=utf8mb4",
+                    "--collation-server=utf8mb4_0900_ai_ci");
+
+    private static final RegisterCommand COMMAND = new RegisterCommand(
+            UUID.fromString(RegisterBodies.CUSTOMER_REF), UUID.fromString(RegisterBodies.ITEM_CODE),
+            RegisterBodies.OPTION_CODE);
+
+    /** 동시성 버그는 경합에서만 나온다. 한 번 통과는 증명이 아니다(명세: 최소 100회). */
+    private static final int ROUNDS = 100;
+    private static final int CONCURRENT = 10;
+
+    /** 리뷰 재현과 같은 규모. 격리 수준이 빠지면 이 크기에서 대부분 교착한다. */
+    private static final int DISTINCT_KEYS = 50;
+    private static final int DISTINCT_ROUNDS = 5;
+
+    /** 키 조회가 이만큼 돌아오지 않으면 등록을 기다리는 중으로 본다. 잠금 없는 조회는 몇 ms 면 끝난다. */
+    private static final long LOCK_WAIT_PROOF_MS = 500;
+
+    /** MySQL 이 DATETIME(6) 을 글자로 내줄 때의 모양. */
+    private static final DateTimeFormatter DB_DATETIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS").withZone(ZoneOffset.UTC);
+
+    @Autowired
+    private RegistrationService service;
+
+    @Autowired
+    private RegistrationRepository repository;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @Autowired
+    private RegistrationWriter writer;
+
+    @Autowired
+    private TransactionTemplate tx;
+
+    @Autowired
+    private MockMvc mvc;
+
+    @Autowired
+    private CancellationService cancellations;
+
+    @Autowired
+    private RegistrationReader reader;
+
+    @MockitoSpyBean
+    private ExternalNumberGenerator numbers;
+
+    /** 등록을 지연 구간에서 붙잡는 데 쓴다. 붙잡지 않는 시험에서는 원래대로 동작한다. */
+    @MockitoSpyBean
+    private FailureInjector failureInjector;
+
+    /** 아래 시험들이 설정에 기대지 않는다는 것을 보이려면 서버가 정말 RR 이어야 한다. */
+    @Test
+    @DisplayName("시험 서버의 커넥션은 MySQL 기본값 REPEATABLE READ 그대로다")
+    void serverDefaultIsRepeatableRead() {
+        assertThat(jdbc.queryForObject("SELECT @@transaction_isolation", String.class))
+                .isEqualTo("REPEATABLE-READ");
+    }
+
+    /** 번호 생성은 등록 트랜잭션 안에서 불린다. 그 자리에서 같은 커넥션의 격리 수준을 읽는다. */
+    @Test
+    @DisplayName("등록 시도는 서버 기본값과 상관없이 READ COMMITTED 로 돈다 — 1062 를 정상 분기로 다루는 설계의 전제")
+    void attemptRunsReadCommitted() {
+        var observed = new AtomicReference<String>();
+        doAnswer(invocation -> {
+            observed.set(jdbc.queryForObject("SELECT @@transaction_isolation", String.class));
+            return invocation.callRealMethod();
+        }).when(numbers).next(any());
+
+        service.register(UUID.randomUUID().toString(), COMMAND);
+
+        assertThat(observed).hasValue("READ-COMMITTED");
+    }
+
+    /**
+     * 서로 다른 새 키도 부딪힐 수 있다. REPEATABLE READ 에서 없는 키를 {@code FOR UPDATE} 로 읽으면 갭 락이
+     * 걸리고, 같은 틈에 떨어진 요청들의 INSERT 가 서로의 갭 락에 막혀 교착(1213)이 난다. 리뷰 재현에서는
+     * 격리 수준이 빠진 채 50건 × 5회 중 213건이 500 이었다.
+     */
+    @Test
+    @DisplayName("서로 다른 새 키 동시 50건 × 5회 - 서버가 REPEATABLE READ 여도 모두 새로 등록된다")
+    void distinctNewKeysConcurrently() throws Exception {
+        for (int round = 0; round < DISTINCT_ROUNDS; round++) {
+            var start = new CountDownLatch(1);
+            List<Future<RegisterResult>> futures = new ArrayList<>(DISTINCT_KEYS);
+            try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                for (int i = 0; i < DISTINCT_KEYS; i++) {
+                    String key = UUID.randomUUID().toString();
+                    futures.add(pool.submit(() -> {
+                        start.await();
+                        return service.register(key, COMMAND);
+                    }));
+                }
+                start.countDown();
+                // 교착이 나면 get() 이 여기서 터진다
+                for (Future<RegisterResult> future : futures) {
+                    assertThat(future.get(30, TimeUnit.SECONDS).replayed()).as("round %d", round).isFalse();
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("같은 키 동시 10건 × 100회 - 매번 등록 1건, 번호 1개, 나머지 9건은 재생")
+    void sameKeyConcurrently() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            String key = UUID.randomUUID().toString();
+            List<RegisterResult> results = registerConcurrently(key);
+
+            assertThat(results).as("round %d", round)
+                    .filteredOn(result -> !result.replayed()).hasSize(1);
+            assertThat(results).as("round %d", round)
+                    .extracting(result -> result.registration().externalNumber())
+                    .containsOnly(results.getFirst().registration().externalNumber());
+            assertThat(repository.findById(key)).as("round %d", round).get()
+                    .satisfies(saved -> {
+                        assertThat(saved.isActive()).isTrue();
+                        assertThat(saved.externalNumber())
+                                .isEqualTo(results.getFirst().registration().externalNumber());
+                    });
+        }
+    }
+
+    private List<RegisterResult> registerConcurrently(String key) throws Exception {
+        var start = new CountDownLatch(1);
+        List<Future<RegisterResult>> futures = new ArrayList<>(CONCURRENT);
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int i = 0; i < CONCURRENT; i++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    return service.register(key, COMMAND);
+                }));
+            }
+            start.countDown();
+            List<RegisterResult> results = new ArrayList<>(CONCURRENT);
+            for (Future<RegisterResult> future : futures) {
+                results.add(future.get(30, TimeUnit.SECONDS));
+            }
+            return results;
+        }
+    }
+
+    /**
+     * 시각을 시간대 없는 값으로 두면 DB 에 밀린 값이 들어가는데, 앱 안에서는 읽을 때 거꾸로 되돌아가
+     * 응답이 멀쩡하다. 그래서 응답이 아니라 <b>DB 에 적힌 글자</b>를 본다.
+     *
+     * <p>이 버그는 JVM 시간대가 UTC 가 아닐 때만 드러난다. 그래서 시험 JVM 은 한국 시간대로 돈다(build.gradle).
+     */
+    @Test
+    @DisplayName("DB 에 저장된 시각 자체가 UTC 다 — 정합성 검사가 이 표를 직접 읽는다")
+    void storesUtcInDatabase() {
+        assertThat(ZoneId.systemDefault().getRules().getOffset(Instant.now()))
+                .as("시험 JVM 이 UTC 면 이 시험은 아무것도 증명하지 못한다 — build.gradle 의 user.timezone 확인")
+                .isNotEqualTo(ZoneOffset.UTC);
+
+        Registration saved = service.register(UUID.randomUUID().toString(), COMMAND).registration();
+
+        String stored = jdbc.queryForObject(
+                "SELECT CAST(confirmed_at AS CHAR) FROM preorder_registrations WHERE external_key = ?",
+                String.class, saved.externalKey());
+        assertThat(stored).isEqualTo(DB_DATETIME.format(saved.confirmedAt()));
+    }
+
+    /**
+     * id 두 칸은 {@code BINARY(16)} 이라 사람이 읽거나 be 쪽 값과 맞댈 때 {@code BIN_TO_UUID} 로 푼다. 다른 바이트
+     * 순서(예: 시간 부분을 뒤바꾼 {@code UUID_TO_BIN(u, 1)})로 쓰이면 앱 안에서는 멀쩡하고 DB 에서만 다른 값이 된다.
+     * 그래서 응답이 아니라 DB 의 바이트를 본다.
+     */
+    @Test
+    @DisplayName("DB 의 id 칸은 UUID_TO_BIN(u) 순서다 - BIN_TO_UUID 로 풀면 보낸 글자 그대로")
+    void storesUuidInUuidToBinOrder() {
+        Registration saved = service.register(UUID.randomUUID().toString(), COMMAND).registration();
+
+        var stored = jdbc.queryForMap(
+                "SELECT BIN_TO_UUID(customer_id) AS customer, BIN_TO_UUID(product_id) AS product"
+                        + " FROM preorder_registrations WHERE external_key = ?",
+                saved.externalKey());
+        assertThat(stored.get("customer")).isEqualTo(RegisterBodies.CUSTOMER_REF);
+        assertThat(stored.get("product")).isEqualTo(RegisterBodies.ITEM_CODE);
+    }
+
+    @Test
+    @DisplayName("번호가 겹치면 MySQL 의 1062 를 받아 새 번호로 다시 시도한다")
+    void numberCollisionOnMySql() {
+        doReturn("R-19990101-0000000001")
+                .doReturn("R-19990101-0000000001")
+                .doReturn("R-19990101-0000000002")
+                .when(numbers).next(any());
+
+        assertThat(service.register(UUID.randomUUID().toString(), COMMAND).registration().externalNumber())
+                .isEqualTo("R-19990101-0000000001");
+        assertThat(service.register(UUID.randomUUID().toString(), COMMAND).registration().externalNumber())
+                .isEqualTo("R-19990101-0000000002");
+    }
+
+    @Test
+    @DisplayName("중복 키만 재시도 대상으로 알아본다 — CHECK 위반은 Mock 의 버그라 재시도하지 않는다")
+    void recognizesOnlyDuplicateKey() {
+        String key = UUID.randomUUID().toString();
+        repository.saveAndFlush(Registration.cancelMarker(key, Instant.now()));
+
+        assertThatThrownBy(() -> repository.saveAndFlush(Registration.cancelMarker(key, Instant.now())))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .satisfies(e -> assertThat(DuplicateKey.isCause(e)).isTrue());
+
+        // ACTIVE 인데 번호가 없다 — ck_registration_active_fields 위반
+        assertThatThrownBy(() -> jdbc.update(
+                "INSERT INTO preorder_registrations (external_key, status) VALUES (?, 'ACTIVE')",
+                UUID.randomUUID().toString()))
+                .isInstanceOf(DataAccessException.class)
+                .satisfies(e -> assertThat(DuplicateKey.isCause(e)).isFalse());
+    }
+
+    /**
+     * 키 조회의 존재 이유. 워커는 응답이 유실되면 이 조회의 404 를 "등록 안 됨" 으로 믿고 재등록한다.
+     * 그냥 읽으면 커밋 안 된 등록을 못 본 채 바로 404 가 나가 중복 등록이 된다.
+     */
+    @Test
+    @DisplayName("키 조회는 커밋 전 등록을 기다렸다가 찾는다 - 그 사이 404 를 주지 않는다")
+    void byKeyWaitsForUncommittedRegistration() throws Exception {
+        String key = UUID.randomUUID().toString();
+
+        MockHttpServletResponse response = lookupWhileRegistrationOpen(key, true);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getContentAsString())
+                .contains(repository.findById(key).orElseThrow().externalNumber());
+    }
+
+    /** 기다린 끝의 404 여야 트랜잭션 안의 등록을 놓치지 않은 것이다. 롤백된 등록은 없던 일이니 기다린 뒤 404 가 맞다. */
+    @Test
+    @DisplayName("기다리던 등록이 롤백되면 키 조회는 그 뒤에 404 다")
+    void byKeyReturns404AfterRollback() throws Exception {
+        String key = UUID.randomUUID().toString();
+
+        MockHttpServletResponse response = lookupWhileRegistrationOpen(key, false);
+
+        assertThat(response.getStatus()).isEqualTo(404);
+        assertThat(repository.findById(key)).isEmpty();
+    }
+
+    /**
+     * 등록 트랜잭션을 INSERT 직후에 붙잡아 둔 채 키 조회를 보낸다. 조회가 등록이 끝나기 전에 돌아오면
+     * 실패다. 그 뒤 등록을 커밋(또는 롤백)하고 조회 응답을 돌려준다.
+     */
+    private MockHttpServletResponse lookupWhileRegistrationOpen(String key, boolean commit) throws Exception {
+        // 바깥 트랜잭션에 합류하면 안쪽 @Transactional 의 격리 수준은 무시된다. 등록과 같게 바깥에서 정한다.
+        var readCommitted = new TransactionTemplate(tx.getTransactionManager());
+        readCommitted.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        var inserted = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<?> registration = pool.submit(() -> readCommitted.executeWithoutResult(status -> {
+                    writer.attemptOnce(key, COMMAND);   // 등록과 같은 경로로 INSERT 까지 간다
+                    inserted.countDown();
+                    awaitQuietly(release);
+                    if (!commit) {
+                        status.setRollbackOnly();
+                    }
+                }));
+                assertThat(inserted.await(10, TimeUnit.SECONDS)).isTrue();
+
+                Future<MockHttpServletResponse> lookup = pool.submit(() ->
+                        mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
+                                .andReturn().getResponse());
+
+                // 잠금 없이 읽으면 여기서 곧바로 404 가 돌아와 있다
+                assertThatExceptionOfType(TimeoutException.class)
+                        .as("등록이 끝나기 전에 키 조회가 돌아왔다 - 잠금 읽기가 아니다")
+                        .isThrownBy(() -> lookup.get(LOCK_WAIT_PROOF_MS, TimeUnit.MILLISECONDS));
+
+                release.countDown();
+                registration.get(10, TimeUnit.SECONDS);
+                return lookup.get(10, TimeUnit.SECONDS);
+            } finally {
+                // 단언이 실패해도 등록 스레드를 풀어야 풀이 닫힌다
+                release.countDown();
+            }
+        }
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 키 칸이 utf8mb4_bin 이다. 콜레이션이 대소문자를 무시하면 남의 등록을 내 것으로 알려준다. */
+    @Test
+    @DisplayName("키 조회는 대소문자를 구별한다")
+    void byKeyIsCaseSensitive() throws Exception {
+        String key = "Key-" + UUID.randomUUID();
+        service.register(key, COMMAND);
+
+        assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key.toUpperCase()))
+                .andReturn().getResponse().getStatus()).isEqualTo(404);
+        assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
+                .andReturn().getResponse().getStatus()).isEqualTo(200);
+    }
+
+    /**
+     * 목록 조회의 순서와 커서 경계는 키 컬럼 콜레이션({@code utf8mb4_bin}, 바이트 순서)에 달려 있어 H2 로는 증명할 수
+     * 없다. 서버 기본 콜레이션은 대소문자를 무시하는 {@code utf8mb4_0900_ai_ci} 로 띄웠으므로, 컬럼 콜레이션이 빠지면
+     * {@code A} 와 {@code a} 가 붙거나 순서가 바뀌어 여기서 깨진다.
+     *
+     * <p>키에 쓸 수 있는 글자는 바이트 순서로 {@code -} {@code .} 숫자 대문자 {@code _} 소문자다. 접두어 뒤에 한 글자씩
+     * 붙여 섞어 넣고, 접두어를 커서로 주면 내 행부터 나온다 — 접두어보다 크고 내 첫 키({@code -})보다 작은 키는 없다.
+     */
+    @Test
+    @DisplayName("목록 조회는 MySQL 에서 바이트 순서로 넘기고, 받은 커서 자신은 다음 페이지에 다시 나오지 않는다")
+    void listPagesInBinaryKeyOrder() {
+        String prefix = "order-" + UUID.randomUUID() + "x";
+        for (String suffix : new String[]{"a", "_", "0", "A", ".", "-"}) {
+            repository.saveAndFlush(Registration.cancelMarker(prefix + suffix, Instant.parse("2026-10-07T00:00:00Z")));
+        }
+
+        RegistrationPage first = reader.findPage(prefix, 3);
+        assertThat(first.items()).extracting(Registration::externalKey)
+                .containsExactly(prefix + "-", prefix + ".", prefix + "0");
+        assertThat(first.nextCursor()).isEqualTo(prefix + "0");
+
+        RegistrationPage second = reader.findPage(first.nextCursor(), 3);
+        assertThat(second.items()).extracting(Registration::externalKey)
+                .startsWith(prefix + "A", prefix + "_", prefix + "a")
+                .doesNotContain(prefix + "0");
+    }
+
+    /**
+     * 명세의 "지연 중 등록 → 취소 → 지연 종료". 지연은 락 밖이라 그 사이 취소가 표식을 남기고, 뒤늦게
+     * 진행된 등록은 표식에 막힌다. 표식이 없으면 "취소 성공" 이라고 답해놓고 등록이 살아난다.
+     *
+     * <p>설정 지연을 크게 잡는 대신 등록을 지연 구간(트랜잭션 밖)에서 붙잡아, 시간에 기대지 않고 이 순서를
+     * 정확히 만든다.
+     */
+    @Test
+    @DisplayName("지연 중 등록 → 취소 → 지연 종료 - 취소는 기다리지 않고 성공, 늦게 진행된 등록은 KEY_CANCELED")
+    void cancelDuringRegistrationLatency() throws Exception {
+        String key = UUID.randomUUID().toString();
+        var inLatency = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            inLatency.countDown();
+            awaitQuietly(release);
+            return invocation.callRealMethod();
+        }).when(failureInjector).apply(any());
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<RegisterResult> registration = pool.submit(() -> service.register(key, COMMAND));
+                assertThat(inLatency.await(10, TimeUnit.SECONDS)).isTrue();
+
+                // 등록이 지연 중이어도 취소는 잠금을 기다리지 않는다
+                CancelResult canceled = pool.submit(() -> cancellations.cancel(key, null))
+                        .get(5, TimeUnit.SECONDS);
+                assertThat(canceled.hadActiveRegistration()).isFalse();
+
+                release.countDown();
+                assertThatThrownBy(() -> registration.get(10, TimeUnit.SECONDS))
+                        .isInstanceOf(ExecutionException.class)
+                        .cause()
+                        .isInstanceOfSatisfying(MockException.class,
+                                e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.KEY_CANCELED));
+            } finally {
+                release.countDown();
+            }
+        }
+
+        assertThat(repository.findById(key)).get()
+                .satisfies(saved -> {
+                    assertThat(saved.isCanceled()).isTrue();
+                    assertThat(saved.externalNumber()).isNull();
+                });
+    }
+
+    /**
+     * 키 조회 404 의 뜻("지금 등록이 없다")을 시험으로 남긴다. 지연은 트랜잭션 밖이라 키 조회가 기다리지 않고
+     * 404 를 주며, 지연이 끝나면 같은 키가 ACTIVE 가 된다. 워커가 이 404 만 보고 포기하면 유령 등록이 된다.
+     */
+    @Test
+    @DisplayName("지연 중인 등록은 키 조회에 404 로 보이고, 지연이 끝나면 ACTIVE 다")
+    void byKeyDoesNotSeeRegistrationInLatency() throws Exception {
+        String key = UUID.randomUUID().toString();
+        var inLatency = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            inLatency.countDown();
+            awaitQuietly(release);
+            return invocation.callRealMethod();
+        }).when(failureInjector).apply(any());
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<RegisterResult> registration = pool.submit(() -> service.register(key, COMMAND));
+                assertThat(inLatency.await(10, TimeUnit.SECONDS)).isTrue();
+
+                // 잠금을 쥔 등록이 없으니 기다리지 않고 바로 답한다
+                Future<MockHttpServletResponse> lookup = pool.submit(() ->
+                        mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
+                                .andReturn().getResponse());
+                assertThat(lookup.get(5, TimeUnit.SECONDS).getStatus()).isEqualTo(404);
+
+                release.countDown();
+                assertThat(registration.get(10, TimeUnit.SECONDS).replayed()).isFalse();
+            } finally {
+                release.countDown();
+            }
+        }
+
+        assertThat(mvc.perform(get("/external/reservations/by-key/{externalKey}", key))
+                .andReturn().getResponse().getContentAsString()).contains("\"ACTIVE\"");
+    }
+
+    /**
+     * 1062 분기를 확률에 맡기지 않고 밟는다. 등록 A 를 "키가 없음을 본 뒤 · INSERT 직전"(번호 생성)에 붙잡고, 그 사이
+     * 같은 키 등록 B 를 끝까지 커밋시킨다. 놓아주면 A 의 INSERT 는 반드시 중복 키다. 커넥터 · Hibernate 를
+     * 올리다 {@code DuplicateKey} 가 예외를 못 알아보게 되면 A 가 재생 대신 500 으로 끝나 여기서 깨진다.
+     */
+    @Test
+    @DisplayName("INSERT 직전에 같은 키 등록이 커밋되면 1062 를 받아 다시 시도하고 그 등록을 재생한다")
+    void duplicateKeyFromRegistrationIsReplayed() throws Exception {
+        String key = UUID.randomUUID().toString();
+        var beforeInsert = holdFirstAttemptBeforeInsert();
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<RegisterResult> late = pool.submit(() -> service.register(key, COMMAND));
+                assertThat(beforeInsert.reached().await(10, TimeUnit.SECONDS)).isTrue();
+
+                RegisterResult early = service.register(key, COMMAND);   // 끝까지 커밋한다
+                beforeInsert.release().countDown();
+                RegisterResult replayed = late.get(10, TimeUnit.SECONDS);
+
+                assertThat(early.replayed()).isFalse();
+                assertThat(replayed.replayed()).as("1062 뒤 새 트랜잭션에서 다시 읽어 재생").isTrue();
+                assertThat(replayed.registration().externalNumber())
+                        .isEqualTo(early.registration().externalNumber());
+            } finally {
+                beforeInsert.release().countDown();
+            }
+        }
+    }
+
+    /** 위와 같은 자리에 취소가 끼어든 경우. 다시 읽은 행이 취소 표식이라 재생보다 먼저 409 다. */
+    @Test
+    @DisplayName("INSERT 직전에 같은 키 취소 표식이 커밋되면 1062 를 받아 다시 시도하고 KEY_CANCELED 다")
+    void duplicateKeyFromCancelMarkerIsKeyCanceled() throws Exception {
+        String key = UUID.randomUUID().toString();
+        var beforeInsert = holdFirstAttemptBeforeInsert();
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            try {
+                Future<RegisterResult> late = pool.submit(() -> service.register(key, COMMAND));
+                assertThat(beforeInsert.reached().await(10, TimeUnit.SECONDS)).isTrue();
+
+                assertThat(cancellations.cancel(key, null).hadActiveRegistration()).isFalse();
+                beforeInsert.release().countDown();
+
+                assertThatThrownBy(() -> late.get(10, TimeUnit.SECONDS))
+                        .isInstanceOf(ExecutionException.class)
+                        .cause()
+                        .isInstanceOfSatisfying(MockException.class,
+                                e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.KEY_CANCELED));
+            } finally {
+                beforeInsert.release().countDown();
+            }
+        }
+
+        assertThat(repository.findById(key)).get().satisfies(saved -> {
+            assertThat(saved.isCanceled()).isTrue();
+            assertThat(saved.externalNumber()).isNull();
+        });
+    }
+
+    /** 번호 생성은 "키 없음" 을 본 뒤 INSERT 직전에 불린다. 첫 시도만 거기서 붙잡고, 나머지는 그대로 둔다. */
+    private Hold holdFirstAttemptBeforeInsert() {
+        var hold = new Hold(new CountDownLatch(1), new CountDownLatch(1));
+        var first = new AtomicBoolean(true);
+        doAnswer(invocation -> {
+            if (first.getAndSet(false)) {
+                hold.reached().countDown();
+                awaitQuietly(hold.release());
+            }
+            return invocation.callRealMethod();
+        }).when(numbers).next(any());
+        return hold;
+    }
+
+    private record Hold(CountDownLatch reached, CountDownLatch release) {
+    }
+
+    /**
+     * 같은 새 키로 등록과 취소가 동시에 들어오면 READ COMMITTED 에는 갭 락이 없어 둘 다 "없음" 을 보고
+     * INSERT 로 간다. 진 쪽은 중복 키를 받아 다시 시도해야 한다. 어떤 순서로 엇갈려도 취소는 모두
+     * 성공하고, 끝나면 활성 등록이 없어야 한다.
+     */
+    @Test
+    @DisplayName("같은 새 키로 등록 5 · 취소 5 동시 × 100회 - 취소는 모두 성공, 최종 활성 0, 끈 등록은 있었을 때만 1건")
+    void registerAndCancelConcurrently() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            String key = UUID.randomUUID().toString();
+            var start = new CountDownLatch(1);
+            List<Future<RegisterResult>> registrations = new ArrayList<>();
+            List<Future<CancelResult>> cancels = new ArrayList<>();
+            try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                for (int i = 0; i < CONCURRENT / 2; i++) {
+                    registrations.add(pool.submit(() -> {
+                        start.await();
+                        return service.register(key, COMMAND);
+                    }));
+                    cancels.add(pool.submit(() -> {
+                        start.await();
+                        return cancellations.cancel(key, null);
+                    }));
+                }
+                start.countDown();
+            }
+
+            // 등록은 취소보다 먼저 커밋했으면 201(재생 포함), 늦었으면 409 다
+            List<String> registeredNumbers = new ArrayList<>();
+            for (Future<RegisterResult> registration : registrations) {
+                try {
+                    registeredNumbers.add(registration.get().registration().externalNumber());
+                } catch (ExecutionException e) {
+                    assertThat(e.getCause()).as("round %d", round)
+                            .isInstanceOfSatisfying(MockException.class,
+                                    mock -> assertThat(mock.errorCode()).isEqualTo(ErrorCode.KEY_CANCELED));
+                }
+            }
+            // 취소는 하나도 실패하면 안 된다 — 실패했으면 get() 이 여기서 터진다
+            long turnedOff = 0;
+            for (Future<CancelResult> cancel : cancels) {
+                if (cancel.get().hadActiveRegistration()) {
+                    turnedOff++;
+                }
+            }
+
+            Registration saved = repository.findById(key).orElseThrow();
+            assertThat(saved.isCanceled()).as("round %d", round).isTrue();
+            if (registeredNumbers.isEmpty()) {
+                assertThat(saved.externalNumber()).as("round %d", round).isNull();
+                assertThat(turnedOff).as("round %d", round).isZero();
+            } else {
+                assertThat(registeredNumbers).as("round %d", round).containsOnly(saved.externalNumber());
+                assertThat(turnedOff).as("round %d", round).isEqualTo(1);
+            }
+        }
+    }
+}

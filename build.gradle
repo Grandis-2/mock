@@ -21,12 +21,17 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    runtimeOnly 'com.h2database:h2'
+    runtimeOnly 'com.mysql:mysql-connector-j'
 
-    compileOnly 'org.projectlombok:lombok'
-    annotationProcessor 'org.projectlombok:lombok'
-    testCompileOnly 'org.projectlombok:lombok'
-    testAnnotationProcessor 'org.projectlombok:lombok'
+    // H2 는 테스트에서 컨텍스트 로딩 확인용으로만 쓴다.
+    // 멱등 등록의 동시성은 잠금과 중복 키 동작에 기대므로 H2 통과가 MySQL 통과를 뜻하지 않는다.
+    testRuntimeOnly 'com.h2database:h2'
+
+    // 동시성 시험은 진짜 MySQL 로 돌린다. 시험이 컨테이너를 직접 띄우므로 Docker 만 켜져 있으면 된다.
+    // Docker 가 없으면 그 시험만 건너뛴다 — 빌드는 막지 않는다.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // Spring Boot 4 에서 MockMvc 자동설정이 별도 모듈로 분리되었다.
@@ -34,6 +39,49 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+tasks.named('processResources') {
+    // 예시 설정은 사람이 복사해 application.yml 을 만드는 원본이다. 실행 중에는 읽히지 않으므로 jar 에 싣지 않는다
+    // (외부 리뷰 L6). 각자 복사한 application.yml 은 여전히 jar 에 들어간다 — 실제 설정을 jar 밖에서 주는 것은
+    // 배포(NV-194)에서 정한다.
+    exclude 'application.yml.example'
+}
+
 tasks.named('test') {
     useJUnitPlatform()
+    // 시간대 버그는 JVM 시간대가 UTC 가 아닐 때만 드러난다(DB 에 9시간 밀려 저장된 적이 있다).
+    // CI 는 보통 UTC 라서, 어느 기계에서 돌려도 잡히게 시험은 한국 시간대로 돌린다.
+    jvmArgs '-Duser.timezone=Asia/Seoul'
+}
+
+// 부하 시험. JUnit 이 아니라 별도 실행이다 — 수천 건에 수십 초가 걸리고 결과가 환경에 따라
+// 달라서 빌드 성패의 기준이 될 수 없다. `test` 에 섞이면 매 빌드가 그만큼 느려진다.
+//
+//   ./gradlew bootRun                                  (다른 터미널에서 Mock 을 먼저 띄운다)
+//   ./gradlew loadTest --args="http://localhost:8081 baseline classify"
+//
+// 인자는 <주소> <시나리오> <패스> [건수] [JDBC] [계정] [비밀번호] 다.
+//   시나리오  baseline · latency · timeout · tail · tail-over-timeout (뒤의 둘은 지연 꼬리, NV-260)
+//   패스      classify (분류 판정 · 응답 타임아웃 5초 = 워커) · latency (지연 판정 · 10초)
+//   건수      생략하면 합의값 5,000. 배선만 확인할 때 작게 넣는다
+//   JDBC      생략하면 localhost:3307. **다른 장비에서 쏠 때는 반드시 Mock 장비 주소로 넣는다**
+//             안 넣으면 원장이 비어 보여 키 대조가 전부 실패로 찍힌다
+//
+// 장비를 나눠 돌릴 때 (docs/load-test.md 합의 조건 1번):
+//   Mock 장비   ./gradlew bootRun
+//   부하 장비   ./gradlew loadTest --args="http://MOCK_IP:8081 baseline classify 5000 \
+//                                          jdbc:mysql://MOCK_IP:3307/external_mock?serverTimezone=UTC"
+//
+// 판정 순서 — 시나리오 × 패스 조합(8개)마다:
+//   그 조합으로 예열 2회(--warmup · 버림) → [POST /external/reset → 판정] × 3회
+//   예열은 인자 어디에든 --warmup 을 붙인다. 판정 결과(PASS · FAIL · 판정 불가)는 보고서 맨 위와 출력의
+//   `판정: …` 줄에 나온다. 하네스의 종료 코드는 0 · 1 · 2 지만 Gradle 을 거치면 FAIL · 판정 불가 모두 1 이라
+//   스크립트는 `판정: …` 줄로 가른다. 예열은 늘 0 으로 끝난다.
+//   조합: baseline·classify · baseline·latency · latency·classify · latency·latency · timeout·classify
+//         tail·classify · tail·latency · tail-over-timeout·classify (꼬리 조합은 15회 판정과 따로 센다)
+//   자세한 이유는 docs/load-test.md, 순서대로 돌리는 방법은 docs/operations.md 3장.
+tasks.register('loadTest', JavaExec) {
+    group = 'verification'
+    description = '부하 시험을 돌린다. Mock 이 이미 떠 있어야 한다'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.grandis.nova.mockapi.load.LoadTestMain'
 }
