@@ -12,8 +12,9 @@ import jakarta.validation.constraints.NotNull;
  *
  * @param winnerCount        당첨 인원(payload.winnerCount). 1 이상, 받은 응모 수보다 작아야 한다(아니면 422)
  * @param expectedEntryCount 기대 응모 수(payload.paidEntries). <b>선택 칸이다.</b> 보내면 Mock 이 회차를 잠근 채 받은 수와 대조하고,
- *                           다르면 409 {@code ENTRY_COUNT_MISMATCH}. 안 보내면 수를 확인하지 않는다 — worker 가 409 를
- *                           "늦춰 다시" 로 읽기 전에는 보내지 않는다(기본 판정은 errorCode 있는 4xx 를 확정 거절로 읽음)
+ *                           다르면 409 {@code ENTRY_COUNT_MISMATCH}. 안 보내면 수를 확인하지 않는다. worker 는 이 칸을 보내고
+ *                           409 를 "늦춰 다시" 로 읽는다(be 와 합의, 2026-10-14 — 기본 판정은 errorCode 있는 4xx 를 확정 거절로 읽어서
+ *                           따로 처리한다)
  */
 public record DrawRequest(
 
