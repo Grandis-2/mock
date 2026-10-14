@@ -1,0 +1,87 @@
+name: _migrate
+
+# 역할: 운영 DB(NCP)의 external_mock 에 마이그레이션을 적용한다. 이 저장소에서 운영 DB 를 바꾸는 유일한 길이다.
+# DB 는 AWS NAT 고정 IP 만 받아 러너에서는 닿지 않는다. 마이그레이션 이미지를 올리고 ECS 태스크로 한 번 돌린다
+# (.github/scripts/ecs-migrate.sh). 태스크는 끝나면 사라진다. DB 계정은 태스크 정의가 넣으므로 여기에는 비밀번호가 없다.
+# 적용할 것이 없으면 Flyway 는 아무것도 바꾸지 않고 끝난다.
+#
+# AWS 에서 하는 일: 마이그레이션 저장소에 올리기 · SSM 파라미터 하나 읽기 · 그 태스크 띄우기 · 그 로그 읽기.
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        type: string
+        required: true
+      cluster:
+        description: ECS 클러스터 이름
+        type: string
+        required: true
+      repository:
+        description: 마이그레이션 이미지를 올릴 ECR 저장소. 태스크 정의가 이 저장소의 latest 를 받는다
+        type: string
+        required: true
+      parameter:
+        description: 띄울 태스크 정의 · 서브넷 · SG 를 인프라가 적어 둔 SSM 파라미터 이름
+        type: string
+        required: true
+    secrets:
+      AWS_ROLE_ARN:
+        description: OIDC 로 빌릴 IAM 역할
+        required: true
+
+permissions: {}
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write   # OIDC 로 IAM 역할을 빌린다. 장기 키를 저장하지 않는다
+    env:
+      ECS_CLUSTER: ${{ inputs.cluster }}
+      MIGRATION_PARAM: ${{ inputs.parameter }}
+      REPOSITORY: ${{ inputs.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          sparse-checkout: |
+            db
+            .github/scripts
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a  # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      # 이미지를 만들기 전에 띄울 곳이 있는지 본다. 인프라가 아직이면 원인을 적고 실패한다 (권한 오류로 보이지 않게)
+      - name: 대상 확인
+        id: target
+        run: bash .github/scripts/ecs-migrate.sh check
+
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd  # v2.1.7
+        if: steps.target.outputs.skip != 'true'
+        id: ecr
+
+      # 태스크 정의는 인프라가 <저장소>:latest 로 둔다. 띄우기 직전에 이 커밋의 SQL 로 latest 를 올리고,
+      # 태스크가 이 digest 로 돌았는지 확인한다(그사이 다른 실행이 latest 를 덮으면 실패).
+      # 커밋 태그는 붙이지 않는다 — 마이그레이션은 앞으로만 가서 고정 · 되돌릴 일이 없다.
+      - name: 이미지 올리기
+        id: push
+        if: steps.target.outputs.skip != 'true'
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ inputs.repository }}:latest
+        run: |
+          set -euo pipefail
+          docker buildx build --load --provenance=false --platform linux/amd64 -t "$IMAGE" db
+          docker push "$IMAGE"
+          digest=$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag=latest \
+            --query 'imageDetails[0].imageDigest' --output text)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: 마이그레이션
+        if: steps.target.outputs.skip != 'true'
+        env:
+          EXPECTED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: bash .github/scripts/ecs-migrate.sh run

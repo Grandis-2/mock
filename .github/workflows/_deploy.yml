@@ -1,0 +1,121 @@
+name: _deploy
+
+# 역할: _image.yml 이 만들어 훑은 이미지를 ECR 에 올리고, ECS 의 Mock 서비스가 그 이미지로 다시 뜨게 한다.
+# 이미지를 만들지 않는다 — 넘겨받은 것을 그대로 올린다. 그래서 이 job 에서는 저장소 코드도 서드파티 도구도 돌지 않는다.
+# 태스크 정의는 인프라가 관리한다(<저장소>:latest). 여기서는 latest 를 옮기고 다시 받게만 한다.
+#
+# AWS 에서 하는 일: Mock 저장소에 올리기 · 서비스 다시 배포 · 그 상태 읽기.
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        type: string
+        required: true
+      cluster:
+        description: ECS 클러스터 이름
+        type: string
+        required: true
+      service:
+        description: ECS 서비스 이름
+        type: string
+        required: true
+      repository:
+        description: Mock 이미지를 올릴 ECR 저장소. 태스크 정의가 이 저장소의 latest 를 받는다
+        type: string
+        required: true
+      image-artifact:
+        description: _image.yml 이 넘긴 이미지 산출물 이름
+        type: string
+        required: true
+    secrets:
+      AWS_ROLE_ARN:
+        description: OIDC 로 빌릴 IAM 역할
+        required: true
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write   # OIDC 로 IAM 역할을 빌린다. 장기 키를 저장하지 않는다
+    env:
+      ECS_CLUSTER: ${{ inputs.cluster }}
+      ECS_SERVICE: ${{ inputs.service }}
+      REPOSITORY: ${{ inputs.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: ${{ inputs.image-artifact }}
+          path: image
+
+      - name: 이미지 받기
+        run: docker load --quiet --input image/mock.tar.gz
+
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a  # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd  # v2.1.7
+        id: ecr
+
+      # 커밋 태그로 올리고, latest 를 그 이미지로 옮긴다. 커밋 태그는 되돌릴 때 가리킬 이름이다.
+      # 커밋 태그는 덮어쓸 수 없다(저장소가 latest 만 예외로 둔다). 이 커밋으로 이미 올린 이미지가 있으면(다시 돌린 실행)
+      # 새로 올리지 않고 그 이미지를 쓴다 — 같은 커밋이 두 이미지를 가리키지 않는다.
+      # latest 는 매니페스트에 태그만 붙여 옮긴다. digest 를 함께 넘겨, 매니페스트가 원본과 다르면 실패한다.
+      - name: 올리기
+        id: push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # 매니페스트는 latest 를 옮길 때 그대로 쓴다. 형식을 바꿔 받지 않도록 받을 형식을 모두 적는다
+          tagged() {
+            aws ecr batch-get-image --repository-name "$REPOSITORY" --image-ids "imageTag=$SHA" \
+              --accepted-media-types \
+                application/vnd.docker.distribution.manifest.v2+json \
+                application/vnd.docker.distribution.manifest.list.v2+json \
+                application/vnd.oci.image.manifest.v1+json \
+                application/vnd.oci.image.index.v1+json \
+              --output json
+          }
+          found=$(tagged)
+          if [ "$(jq '.images | length' <<< "$found")" -eq 0 ]; then
+            # 태그가 없다는 답만 "아직 안 올림"이다. 저장소가 없거나 권한이 없는 오류는 그대로 실패한다
+            jq -e '[.failures[].failureCode] == ["ImageNotFound"]' <<< "$found" > /dev/null \
+              || { echo "::error::$REPOSITORY 조회 실패: $(jq -c .failures <<< "$found")"; exit 1; }
+            docker tag nova-mock:ci "$REGISTRY/$REPOSITORY:$SHA"
+            docker push "$REGISTRY/$REPOSITORY:$SHA"
+            found=$(tagged)
+          else
+            echo "::notice::$REPOSITORY:$SHA 가 이미 있어 그 이미지를 쓴다"
+          fi
+          digest=$(jq -er '.images[0].imageId.imageDigest' <<< "$found")
+
+          # 이미 같은 이미지에 붙어 있으면 ImageAlreadyExistsException 이다. 할 일이 없으니 넘어간다
+          if ! out=$(aws ecr put-image --repository-name "$REPOSITORY" --image-tag latest \
+                --image-manifest "$(jq -r '.images[0].imageManifest' <<< "$found")" \
+                --image-manifest-media-type "$(jq -r '.images[0].imageManifestMediaType' <<< "$found")" \
+                --image-digest "$digest" 2>&1); then
+            grep -qF ImageAlreadyExistsException <<< "$out" || { echo "$out"; exit 1; }
+          fi
+
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $REPOSITORY"
+            echo "\`$REGISTRY/$REPOSITORY:$SHA\` (\`$digest\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 배포
+        env:
+          EXPECTED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: bash .github/scripts/ecs-deploy.sh
