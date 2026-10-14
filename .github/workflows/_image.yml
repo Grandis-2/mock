@@ -1,0 +1,69 @@
+name: _image
+
+# 역할: 시험을 통과한 jar 로 이미지를 만들고, 띄워 AOT 캐시를 학습해 얹고, 취약점을 훑는다. 올리지 않는다 — AWS 자격(id-token)이 없다.
+# 여기서 서드파티 이미지(trivy · curl · mysql)와 방금 만든 이미지를 실행하므로, 자격을 가진 job(_deploy.yml)과 갈라 둔다.
+# image-artifact 를 주면 만든 이미지를 산출물로 넘긴다. 올리는 쪽은 훑은 그 이미지를 그대로 올린다.
+on:
+  workflow_call:
+    inputs:
+      jar-artifact:
+        description: _build.yml 이 올린 jar 산출물 이름
+        type: string
+        required: true
+      image-artifact:
+        description: 이미지를 넘길 산출물 이름. 비우면 만들어 보기만 한다(PR)
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: ${{ inputs.jar-artifact }}
+          path: build/libs
+
+      # 기반 이미지를 만들어 마이그레이션 이미지가 만든 표로 띄우고, 대표 요청으로 AOT 캐시를 학습해 얹는다.
+      # 기반 이미지 빌드 · 학습 · 캐시 얹기 · 검증을 한 job 에서 한다. 캐시는 학습한 그 이미지 위에만 얹어야 한다 —
+      # 그래서 만든 이미지를 그대로 _deploy.yml 로 넘긴다. 내용은 docker/train.sh.
+      # 빨간불의 의미: 기동 실패 = 표와 엔티티 불일치 · 설정, 요청 학습 = API 동작, 검증 = 캐시가 받아지지 않음(JDK · 캐시 경로 어긋남).
+      - name: 학습 · 검증
+        env:
+          FINAL_IMAGE: nova-mock:ci
+        run: SUMMARY="$GITHUB_STEP_SUMMARY" bash docker/train.sh
+
+      # 베이스 이미지의 OS 패키지와 안에 든 jar 를 함께 훑는다. ECR 의 scanOnPush 는 올라간 뒤에 본다.
+      # 액션 대신 digest 로 고정한 이미지를 직접 돌린다. 경고만 한다(be 와 같다) — 막으려면 --exit-code 를 1 로 바꾼다.
+      # 훑지 못한 것(취약점 DB 를 받지 못함 등)도 경고로 남기고 넘어간다. 바깥 서비스가 멈췄다고 배포가 막히지 않게.
+      - name: trivy
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa \
+            image --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed --format table --exit-code 0 nova-mock:ci \
+            || echo "::warning::trivy 를 돌리지 못했다 — 이 이미지는 취약점을 훑지 않은 채 넘어간다"
+
+      - name: save
+        if: inputs.image-artifact != ''
+        run: |
+          set -euo pipefail
+          mkdir -p image
+          docker save nova-mock:ci | gzip -1 > image/mock.tar.gz
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: inputs.image-artifact != ''
+        with:
+          name: ${{ inputs.image-artifact }}
+          path: image/mock.tar.gz
+          if-no-files-found: error
+          compression-level: 0   # 이미 gzip 이다
+          retention-days: 1

@@ -1,0 +1,85 @@
+name: _build
+
+# 역할: 컴파일하고 시험을 돌려 실행 jar 를 만든다. 저장소를 읽기만 하고 AWS 에는 닿지 않는다.
+# build.yml · release.yml 이 불러 쓴다. 이미지는 여기서 시험을 통과한 그 jar 로 만든다(_image.yml).
+on:
+  workflow_call:
+    inputs:
+      jar-artifact:
+        description: 실행 jar 를 올릴 산출물 이름
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  gradle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
+
+      # MySQL 동시성 시험은 Testcontainers 로 컨테이너를 직접 띄운다. ubuntu 러너에는 Docker 가 있다.
+      # 시험용 설정(src/test/resources/application.yml)만으로 돈다 — main 의 application.yml 은 추적하지 않는다.
+      - run: ./gradlew build --no-daemon
+
+      # 초록과 별개로 "시험이 정말 돌았는가" 를 본다. 결과가 비었거나 건너뜀이 있으면 실패다.
+      # Docker 가 없으면 MySQL 시험이 조용히 건너뛰어지고 빌드는 초록이 된다. 동시성 보장의 유일한 증거가
+      # 그 시험이라, 건너뛴 채로 초록을 두지 않는다.
+      - name: test summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, re, sys
+          files = glob.glob('build/test-results/test/*.xml')
+          tot = {'tests': 0, 'skipped': 0, 'failures': 0, 'errors': 0}
+          skipped = []
+          for f in files:
+              text = open(f, encoding='utf-8').read()
+              m = re.search(r'tests="(\d+)" skipped="(\d+)" failures="(\d+)" errors="(\d+)"', text)
+              if not m:
+                  print(f'::error::결과 파일을 읽지 못했다: {f}'); sys.exit(1)
+              for k, v in zip(tot, m.groups()):
+                  tot[k] += int(v)
+              if int(m.group(2)) > 0:
+                  skipped.append(f)
+          print('TEST SUMMARY', tot, 'files=%d' % len(files))
+          if not files or tot['tests'] == 0:
+              print('::error::시험 결과가 비었다'); sys.exit(1)
+          if tot['skipped'] > 0:
+              print('::error::건너뛴 시험이 있다 — Docker(Testcontainers)를 확인하라: ' + ', '.join(skipped))
+              sys.exit(1)
+          PY
+
+      # 실패해도 리포트는 남긴다. 어느 시험이 깨졌는지 보려면 이게 필요하다.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        if: failure()
+        with:
+          name: test-reports
+          path: build/reports/tests/
+          retention-days: 7
+
+      # 시험을 통과한 jar 를 그대로 넘긴다. 이미지를 만들 때 gradle 을 다시 돌리지 않는다.
+      # -plain.jar 는 의존성이 없어 실행되지 않는다.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: ${{ inputs.jar-artifact }}
+          path: |
+            build/libs/*.jar
+            !build/libs/*-plain.jar
+          if-no-files-found: error
+          compression-level: 0   # jar 는 이미 압축돼 있다
+          retention-days: 1

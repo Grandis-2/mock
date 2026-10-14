@@ -1,0 +1,72 @@
+# 로컬 개발용 MySQL.
+#
+# 본 서비스(be)와 통합할 때는 그쪽 MySQL 인스턴스에 external_mock database 를 만들어 붙인다.
+# ERD 가 "같은 인스턴스의 별도 database" 로 정했고, 정합성 검사가 두 스키마를 한 번에 읽기 때문이다.
+# 여기 컨테이너는 Mock 만 따로 개발·시험할 때 쓴다.
+#
+# 값은 .env 로 덮는다. .env 가 없으면 아래 기본값으로 뜬다.
+# .env 는 추적하지 않으므로 각자 다른 포트를 써도 남의 설정을 건드리지 않는다. .env.example 을 복사해 쓴다
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: ${MYSQL_CONTAINER_NAME:-nova-mock-mysql}
+    ports:
+      # 왼쪽만 바꾼다. 컨테이너 안은 3306 으로 고정이고 호스트 포트만 사람마다 갈린다.
+      # 기본은 이 PC 에서만(127.0.0.1) 받는다. 계정이 알려진 기본값(nova/nova)이라, 모든 인터페이스에 열면
+      # 같은 망(학교 · 카페 와이파이)의 누구나 원장을 읽고 고칠 수 있다(root/root 도 밖에서 닿는다). 부하를 다른
+      # 장비에서 쏘는 시험만 .env 의 MYSQL_BIND=0.0.0.0 으로 열고, 그때는 비밀번호를 바꿔 DB 를 새로 만든다 —
+      # 계정 · 비밀번호는 볼륨을 처음 만들 때만 정해져 .env 만 고쳐서는 바뀌지 않는다(.env.example).
+      - "${MYSQL_BIND:-127.0.0.1}:${MYSQL_PORT:-3307}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-external_mock}
+      MYSQL_USER: ${MYSQL_USER:-nova}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-nova}
+      TZ: UTC
+    command:
+      # MySQL 서버 기본값은 REPEATABLE READ 다. 등록·취소가 같은 새 키로 동시에 들어올 때
+      # 중복 키(1062)를 정상 분기로 처리하는 설계가 READ COMMITTED 전제다.
+      # 애플리케이션(Hikari)에서도 한 번 더 지정한다.
+      - --transaction-isolation=READ-COMMITTED
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # 부하 시험에서 커넥션이 몰린다
+      - --max-connections=500
+      # 커밋마다 디스크 동기화를 하지 않는다(로그는 1초마다 내린다). 이 컨테이너 전용이다 — RDS 는 기본값(1 · 1) 그대로.
+      # Docker Desktop(WSL2) 디스크는 동기화가 느리고 들쭉날쭉해 COMMIT 이 평균 29ms · p99 200ms 까지 걸렸고,
+      # 500 RPS 에서 풀 30 의 여유(트랜잭션당 60ms)가 깨져 부하 판정이 Mock 이 아니라 디스크를 쟀다.
+      # 완화하면 COMMIT 평균 0.49ms · p99 4.8ms, 판정 14회 모두 통과(2026-10-01, docs/load-test.md).
+      # 잃는 것은 OS · 가상 머신이 죽을 때 마지막 1초 정도다. Mock 프로세스를 죽이는 재기동 시나리오는 영향 없다.
+      - --innodb-flush-log-at-trx-commit=2
+      - --sync-binlog=0
+    volumes:
+      # 최초 기동 때 한 번 실행된다. 스키마를 바꿨으면 볼륨을 지우고 다시 띄운다(docker compose down -v)
+      - ./docs/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      # 컨테이너를 내려도 등록 기록이 남는다. "재기동 후 기록 보존" 시험에 필요하다
+      - mock-mysql-data:/var/lib/mysql
+    healthcheck:
+      # 인증 없이 ping 하면 접근 거부 상태에서도 "mysqld is alive" 가 와서 통과해 버린다
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Mock 을 여러 대로 띄울 때(mock.shared-state=redis)만 쓴다. 설정 · 결함을 서버끼리 나눈다.
+  # 평소 docker compose up 에는 뜨지 않는다 — docker compose --profile redis up -d 로 켠다.
+  # 운영은 이 컨테이너가 아니라 be 가 쓰는 Redis(인프라 service.yml 의 redis: main)에 붙는다.
+  redis:
+    image: redis:8
+    container_name: ${REDIS_CONTAINER_NAME:-nova-mock-redis}
+    profiles: [ "redis" ]
+    ports:
+      # MySQL 과 같은 이유로 기본은 이 PC 에서만 받는다. 비밀번호가 없으므로 다른 장비의 Mock 이 붙어야 할 때만
+      # .env 의 REDIS_BIND=0.0.0.0 으로 열고, 시험이 끝나면 되돌린다.
+      - "${REDIS_BIND:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mock-mysql-data:
