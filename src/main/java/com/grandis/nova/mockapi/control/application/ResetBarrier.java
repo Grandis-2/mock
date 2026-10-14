@@ -3,11 +3,11 @@ package com.grandis.nova.mockapi.control.application;
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import org.springframework.stereotype.Component;
 
 /**
- * 초기화와 진행 중인 등록 · 취소를 서로 막는 장벽.
+ * 초기화와 진행 중인 쓰는 요청(등록 · 취소 · 럭키드로우 응모 · 추첨)을 서로 막는 장벽. 아래 "등록 · 취소" 는 이 넷을 말한다.
  *
  * <p>막지 않으면 이렇게 된다 — 지연 중인 등록 K → K 취소(표식) → 초기화(표식까지 삭제) → 지연이 끝난
  * 등록이 커밋 → <b>취소 성공을 받은 K 가 ACTIVE 로 살아난다.</b> 지연 · 결함의 유지 시간은 트랜잭션
@@ -45,18 +45,20 @@ public class ResetBarrier {
     /**
      * 진행 중인 등록 · 취소가 없을 때만 {@code reset} 을 실행한다. 끝날 때까지 새 등록 · 취소를 붙잡아 둔다.
      *
+     * @param <T> 초기화 결과
+     *
      * <p>{@code reset} 은 트랜잭션 경계 바깥에서 감싸야 한다. 안에서 잡으면 잠금이 커밋보다 먼저 풀린다.
      *
      * @throws MockException 진행 중인 요청이 있으면 409 {@link ErrorCode#RESET_BUSY}
      */
-    public long exclusively(LongSupplier reset) {
+    public <T> T exclusively(Supplier<T> reset) {
         if (!lock.writeLock().tryLock()) {
             throw new MockException(ErrorCode.RESET_BUSY,
-                    "진행 중인 등록 · 취소가 %d건 있어 초기화할 수 없습니다. 끝난 뒤 다시 부르세요."
+                    "진행 중인 등록 · 취소 · 응모 · 추첨이 %d건 있어 초기화할 수 없습니다. 끝난 뒤 다시 부르세요."
                             .formatted(inFlight()));
         }
         try {
-            return reset.getAsLong();
+            return reset.get();
         } finally {
             lock.writeLock().unlock();
         }
