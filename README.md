@@ -74,3 +74,4 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | [docs/operations.md](docs/operations.md) | 운영 · 시연 — Mock 조절 · 장애 재현 · 부하 실행 · 결과 확인 |
 | [docs/load-test.md](docs/load-test.md) | 부하 시험 — 판정 기준과 결과 |
 | [docs/schema.sql](docs/schema.sql) | 스키마 정본 |
+| [docs/deploy.md](docs/deploy.md) | 빌드 · 배포 — 워크플로 · 이미지 · 스키마 변경 · 인프라 준비물 |

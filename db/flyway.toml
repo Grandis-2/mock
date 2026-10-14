@@ -1,0 +1,20 @@
+# be 의 flyway-project/flyway.toml 과 같은 규칙이다. 다른 것은 스키마 이름뿐이다.
+# 같은 DB 서버의 shop 은 be 가 관리한다. 여기는 external_mock.flyway_schema_history 만 쓴다.
+[environments.default]
+schemas = ["external_mock"]
+
+[flyway]
+locations = ["filesystem:migrations"]
+defaultSchema = "external_mock"
+# database 와 계정 · 권한은 인프라(nova-infra ncp/database)가 만든다.
+createSchemas = false
+cleanDisabled = true
+# 이미 표가 있는 DB 를 조용히 기준선으로 삼지 않는다. 첫 적용은 README 의 절차로 사람이 정한다.
+baselineOnMigrate = false
+outOfOrder = false
+validateOnMigrate = true
+validateMigrationNaming = true
+# 이미지에 migrations 를 빠뜨리면 아무것도 적용하지 않은 채 성공하지 않게 한다.
+failOnMissingLocations = true
+# 기본값인 future 무시를 끈다. 오래된 이미지로 돌리면 실패해야 한다.
+ignoreMigrationPatterns = []
