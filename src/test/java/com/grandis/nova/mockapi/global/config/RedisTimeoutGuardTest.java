@@ -40,12 +40,19 @@ class RedisTimeoutGuardTest {
                 .hasMessageContaining("받은 값: null");
     }
 
+    /**
+     * 두 번 기다린 시간이 워커 읽기 타임아웃의 절반을 넘으면 거절한다. 나머지 절반은 지연 · 처리 몫이다 — 2499ms 면 두 번에
+     * 4998ms 라 최소 지연 300ms 만 더해도 5초를 넘는다(리뷰 지적).
+     */
     @Test
-    @DisplayName("두 번 기다리면 워커 읽기 타임아웃에 닿는 값은 뜨지 않는다 — 경계 2500ms(5초의 절반)부터 거절")
+    @DisplayName("두 번 기다린 시간이 워커 읽기 타임아웃의 절반을 넘으면 뜨지 않는다 — 5초면 1250ms 까지, 1251ms 부터 거절")
     void tooLongFails() {
-        assertThatCode(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(2499), WORKER_READ_TIMEOUT_MS))
+        assertThatCode(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(1250), WORKER_READ_TIMEOUT_MS))
                 .doesNotThrowAnyException();
-        assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(2500), WORKER_READ_TIMEOUT_MS))
+        assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(1251), WORKER_READ_TIMEOUT_MS))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("절반");
+        assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(2499), WORKER_READ_TIMEOUT_MS))
                 .isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofSeconds(60), WORKER_READ_TIMEOUT_MS))
                 .isInstanceOf(IllegalStateException.class);
