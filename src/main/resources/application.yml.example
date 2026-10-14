@@ -46,6 +46,9 @@ spring:
 
 server:
   port: 8081
+  # 헬스 체크는 관리 포트 9081 의 GET /actuator/health/readiness · liveness 다(200 {"status":"UP"}). 서비스 포트로는 나가지 않는다.
+  # 관리 포트 · 노출 범위는 코드 기본값(MockDefaults)에 있다. 여기 management.* 를 적으면 그 값이 이긴다 —
+  # 포트를 바꾸면 인프라 service.yml 의 management_port · health.port 도 같이 바꾼다. 서비스 포트와 같게 두면 기동하지 않는다.
   tomcat:
     # 톰캣 기본값과 같다 — 올린 값이 아니라 한도를 보이려고 적어 둔다.
     # failureMode=TIMEOUT 과 응답 유실 결함은 응답하지 않고 연결을 붙잡는다. 붙잡는 연결이 이걸 넘으면
