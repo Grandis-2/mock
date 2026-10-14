@@ -15,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -180,8 +182,13 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
             if (mine.behind(stored)) {
                 reload(onChange);
             }
+        } catch (RedisConnectionFailureException | QueryTimeoutException e) {
+            // Redis 에 닿지 못한 것(연결 실패 · 시간 초과)만 경고로 넘긴다 — 결함 저장소(RedisFaultStorage)와 같은 기준이다.
+            log.warn("공유 설정 확인 실패(Redis 에 닿지 못함) — 다음 차례에 다시 본다: {}", e.toString());
         } catch (RuntimeException e) {
-            log.warn("공유 설정 확인 실패 — 다음 차례에 다시 본다: {}", e.toString());
+            // 그 밖은 버그다(저장된 모양이 바뀌어 읽지 못하는 경우 등). 경고 한 줄로 삼키면 설정이 조용히 안 맞춰지므로 스택과 함께
+            // error 로 남긴다. 다시 던지지는 않는다 — 예약 작업은 예외를 던지면 다음 차례부터 멈춘다.
+            log.error("공유 설정 확인 중 예상하지 못한 오류 — 다음 차례에 다시 본다", e);
         }
     }
 
