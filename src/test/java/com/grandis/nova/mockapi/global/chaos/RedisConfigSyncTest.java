@@ -162,16 +162,20 @@ class RedisConfigSyncTest {
             for (int round = 0; round < rounds; round++) {
                 int base = a.snapshot().configVersion();
                 ConcurrentLinkedQueue<Integer> versions = new ConcurrentLinkedQueue<>();
+                CountDownLatch ready = new CountDownLatch(2);
                 CountDownLatch go = new CountDownLatch(1);
 
                 List<CompletableFuture<Void>> writers = List.of(a, b).stream()
                         .map(store -> CompletableFuture.runAsync(() -> {
+                            ready.countDown();
                             await(go);
                             IntStream.range(0, perServer).forEach(i ->
                                     versions.add(store.update(500, i / 100.0, FailureMode.HTTP_5XX)
                                             .snapshot().configVersion()));
                         }, pool))
                         .toList();
+                // 둘 다 출발선에 선 뒤에 놓는다. 바로 놓으면 한쪽이 20번을 다 끝낸 뒤에 다른 쪽이 시작할 수 있다
+                await(ready);
                 go.countDown();
                 CompletableFuture.allOf(writers.toArray(CompletableFuture[]::new)).get();
 

@@ -233,15 +233,19 @@ class DrawConcurrencyTest {
     }
 
     private static <T> List<Outcome<T>> runConcurrently(List<Callable<T>> calls) throws Exception {
+        var ready = new CountDownLatch(calls.size());
         var start = new CountDownLatch(1);
         List<Future<T>> futures = new ArrayList<>(calls.size());
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             for (Callable<T> call : calls) {
                 futures.add(pool.submit(() -> {
+                    ready.countDown();
                     start.await();
                     return call.call();
                 }));
             }
+            // 모두 출발선에 선 뒤에 놓는다. 바로 놓으면 먼저 뜬 요청이 끝난 뒤에 나머지가 시작해 경합이 줄어든다
+            ready.await();
             start.countDown();
             List<Outcome<T>> outcomes = new ArrayList<>(calls.size());
             for (Future<T> future : futures) {

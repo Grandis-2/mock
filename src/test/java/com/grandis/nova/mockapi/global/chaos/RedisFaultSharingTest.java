@@ -115,16 +115,20 @@ class RedisFaultSharingTest {
                 String key = "race-" + round;
                 servers.get(round % servers.size()).inject(key, FaultType.RESPONSE_LOST_AFTER_COMMIT);
                 AtomicInteger fired = new AtomicInteger();
+                CountDownLatch ready = new CountDownLatch(takers);
                 CountDownLatch go = new CountDownLatch(1);
 
                 List<CompletableFuture<Void>> attempts = IntStream.range(0, takers)
                         .mapToObj(i -> CompletableFuture.runAsync(() -> {
+                            ready.countDown();
                             await(go);
                             if (servers.get(i % servers.size()).consumeResponseLost(key)) {
                                 fired.incrementAndGet();
                             }
                         }, pool))
                         .toList();
+                // 모두 출발선에 선 뒤에 놓는다. 바로 놓으면 먼저 뜬 쪽이 꺼낸 뒤에 나머지가 시작해 경합이 줄어든다
+                await(ready);
                 go.countDown();
                 CompletableFuture.allOf(attempts.toArray(CompletableFuture[]::new)).get();
 
