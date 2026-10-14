@@ -69,6 +69,15 @@ curl http://localhost:8081/external/config
 be 의 UUID 전환(NV-326)과 **같은 때** 바꾼다 — 새 Mock 은 숫자 id 를, 옛 Mock 은 UUID 를 400 으로 거절하므로 한쪽만 바뀐 사이의 등록은
 모두 실패한다. 순서: be 워커 · Mock 정지 → 원장 비우고 칸 변경 → 새 Mock 기동 → be 배포(마이그레이션이 남은 동기화 작업도 비운다) → 워커 재개.
 
+**NV-505(럭키드로우) 이전에 만든 DB 에는 `draws` · `draw_entries` 표가 없어 그대로 뜨지 않는다**(`ddl-auto: validate` 가
+없는 표로 기동을 멈춘다). compose 는 빈 볼륨일 때만 `schema.sql` 을 돌리기 때문이다. **지우지 말고** 이 파일을 한 번 다시
+돌린다 — 표마다 `CREATE TABLE IF NOT EXISTS` 라 없는 표만 생기고 등록 원장은 그대로다(2026-10-14 확인: 옛 스키마 DB 에 두 번
+돌려 오류 없이 표 2개만 생기고 기존 행이 남음).
+
+```bash
+docker exec -i nova-mock-mysql mysql -uroot -proot < docs/schema.sql     # .env 의 컨테이너 이름 · root 비밀번호를 바꿨으면 그 값으로
+```
+
 ## 1. Mock 조절 — 지연과 실패율
 
 재기동 없이 바꾼다. 시연 조작 패널이다.
@@ -349,12 +358,13 @@ curl -X POST localhost:8081/external/reset -H 'Content-Type: application/json' \
   -d '{"confirm":"RESET"}'
 ```
 
-확인 문자열이 틀리면 400 이고 **아무것도 지우지 않는다.** 등록 행과 취소 표식을 지우고 지운 수를
-돌려주며, **지연·실패 설정과 `configVersion` 은 남긴다.**
+확인 문자열이 틀리면 400 이고 **아무것도 지우지 않는다.** 등록 행과 취소 표식, 럭키드로우 회차 · 응모를 지우고
+지운 수를 돌려주며(`deletedCount` 는 등록 원장만, 럭키드로우는 `deletedDrawEntries` · `deletedDraws`), **지연·실패
+설정과 `configVersion` 은 남긴다.**
 
-**진행 중인 등록 · 취소가 있으면 409 `RESET_BUSY` 로 거절하고 아무것도 지우지 않는다.** 메시지에 건수가
-나온다. 지연 중이던 등록이 초기화 뒤에 커밋되어, 취소한 키가 ACTIVE 로 살아나는 것을 막는다.
-`TIMEOUT` · 결함으로 붙잡힌 요청도 진행 중으로 세므로 유지 시간(기본 7초) 동안은 거절된다.
+**진행 중인 등록 · 취소 · 응모 · 추첨이 있으면 409 `RESET_BUSY` 로 거절하고 아무것도 지우지 않는다.** 메시지에 건수가
+나온다. 지연 중이던 등록이 초기화 뒤에 커밋되어, 취소한 키가 ACTIVE 로 살아나는 것을 막는다(응모면 다음 시험의 회차에
+섞이는 것을 막는다). `TIMEOUT` · 결함으로 붙잡힌 요청도 진행 중으로 세므로 유지 시간(기본 7초) 동안은 거절된다.
 
 > **시연 중 409 를 받으면** 지연을 0 으로 내리고, 진행 중인 요청이 끝날 만큼(설정해 둔 최대 지연 + 유지
 > 시간) 기다린 뒤 다시 부른다. 취소 경합 프리셋(지연 6~14초) 직후에 특히 잘 걸린다.
@@ -376,6 +386,9 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | ④ 지연이 끝난 등록 | **201 · ACTIVE** (취소가 사라짐) | **409 `KEY_CANCELED`** — 표식이 남아 있어서 |
 | ⑤ 초기화 다시 | — | 200 · `deletedCount: 1` (표식) |
 | ⑥ K 키 조회 | 200 · ACTIVE | **404** · DB 0행 |
+
+(2026-10-01 기록이다. NV-505 부터 ③ 의 문구는 "진행 중인 등록 · 취소 · 응모 · 추첨이 1건" 이고, ⑤ 응답에
+`deletedDrawEntries` · `deletedDraws` 가 함께 나온다.)
 
 ### 2-5. 5xx 종류별 응답 — `MIXED` (NV-312)
 
@@ -465,6 +478,40 @@ curl localhost:8082/external/config      # failureRate 0.3 · 같은 configVersi
 정보(`spring.data.redis.host · port · ssl`)가 들어온다. **시간 초과는 들어오지 않으므로** 인프라의 `mock/application.yml` 에
 `spring.data.redis.timeout` · `connect-timeout` 을 함께 적는다(위). 키는 `mock:` 으로 시작해 be 의 키와 섞이지 않는다. 대수(`scaling`)와
 worker 의 `mock-max-instances`(Mock 대수에 맞춘 동시 호출 상한)는 인프라 담당이 함께 바꾼다.
+
+### 2-7. 럭키드로우 — 응모 · 추첨 해 보기 (NV-505)
+
+be worker 가 아직 없어 손으로 부른다. 계약은 [api.md](api.md) 「럭키드로우」. 처음 보는 회차는 첫 응모가 만든다.
+
+```bash
+# 응모 3건 — 회원 id 는 소문자 UUID 여야 한다
+for i in 1 2 3; do
+  curl -X POST localhost:8081/external/draw-entries -H 'Content-Type: application/json' \
+    -H "Idempotency-Key: demo-entry-$i" \
+    -d "{\"entryId\":\"demo-entry-$i\",\"drawId\":\"demo-draw-1\",\"customerId\":\"0199a3f0-0000-7000-8000-00000000000$i\"}"
+done
+
+curl localhost:8081/external/draws/demo-draw-1                       # OPEN · entryCount 3 · winnerEntryIds []
+
+curl -i -X POST localhost:8081/external/draws/demo-draw-1/draw \
+  -H 'Content-Type: application/json' -d '{"winnerCount":1}'          # 200 · DRAWN · 당첨 1명
+```
+
+2026-10-14 실제 MySQL · HTTP 로 확인한 것(임시 DB, 포트만 다름):
+
+| 순서 | 결과 |
+| --- | --- |
+| 응모 3건 | 201 × 3 |
+| `demo-entry-1` 다시 | 201 · `X-Idempotent-Replay: true` · 처음과 같은 `receivedAt` |
+| 회차 조회 | `OPEN` · `entryCount: 3` · `winnerEntryIds: []` |
+| 1명 추첨 | 200 · `DRAWN` · `winnerEntryIds: ["demo-entry-3"]` |
+| 같은 추첨 다시 | 200 · `X-Idempotent-Replay: true` · **같은 당첨**(다시 뽑지 않음) |
+| 추첨 뒤 `demo-entry-4` | 409 `DRAW_CLOSED` |
+| 초기화 | `{"deletedCount":0,"deletedDrawEntries":3,"deletedDraws":1}` |
+
+**같은 회차 id 로 다시 해 보려면 초기화한다** — 추첨한 회차는 다시 열지 않는다. 시연에서는 회차 id 를 바꿔 가며 해도 된다.
+추첨 인원은 1명도 여러 명도 되지만 받은 응모 수보다 작아야 한다(같거나 크면 422 — be 는 전원 당첨이면 Mock 을 부르지 않는다).
+실패율을 올려 두면 응모 · 추첨도 그 비율로 500 이 나고 저장 · 추첨하지 않는다 — worker 재시도 시험용이다.
 
 ## 3. 부하 실행
 

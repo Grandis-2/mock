@@ -3,9 +3,9 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.16 / 2026-10-13 (여러 대 실행 — 설정 · 결함을 Redis 로 공유 `mock.shared-state`. 5.15: `customerRef` · `itemCode` 를 소문자 표준 UUID 로) |
+| 버전 / 작성일 | 5.17 / 2026-10-14 (럭키드로우 응모 · 회차 조회 · 추첨 3개 — NV-505. 5.16: 여러 대 실행 — 설정 · 결함을 Redis 로 공유 `mock.shared-state`) |
 | 서버 | `http://localhost:8081` |
-| 개수 | 9개 |
+| 개수 | 12개 |
 | 기준 | 원장 · 응답은 ERD v14.1 (2026-10-06) 의 `external_mock` 영역 — 칸 · 제약은 v5(2026-09-17)와 같고, `customer_id` · `product_id` 만 be 의 id UUID 전환(NV-326)을 따라 `BINARY(16)` 이다(ERD 는 `BIGINT`). 요청 본문은 본 서비스(preorder)의 `RegisterRequestPayload` · `CancelRequestPayload` (be 결정, 2026-10-06) |
 
 **이 문서가 Mock API 계약의 정본이다.** 계약을 바꾸려면 이 파일을 고치는 PR 로 하고, 구현과 다르면 둘 중 하나가 버그다.
@@ -21,7 +21,7 @@
 | 항목 | 내용 |
 | --- | --- |
 | 실행 대수 | 기본은 **1개**(`mock.shared-state=memory`, 설정·결함이 메모리). **여러 대면 `redis`** — 설정·결함을 Redis 로 나눠, 한 대에서 바꿔도 모두 바뀐다(설정 변경 절) |
-| 저장 | 등록 기록만 `external_mock` 스키마(MySQL). 설정·결함은 `memory` 모드(기본)면 메모리, `redis` 모드면 Redis |
+| 저장 | 등록 기록 · 럭키드로우 회차와 응모는 `external_mock` 스키마(MySQL). 설정·결함은 `memory` 모드(기본)면 메모리, `redis` 모드면 Redis |
 | 스레드 | **가상 스레드.** 지연 2000ms 로 부하를 걸면 요청 수천 건이 Mock 안에서 동시에 대기한다. 블로킹 스레드 풀이면 큐가 밀려 설정값보다 훨씬 큰 지연이 관측되고, "우리 서버가 느린 것"과 "Mock 이 느린 것"을 구분할 수 없게 된다 |
 | 지연 위치 | 지연은 **트랜잭션 밖**에서 기다린다. 트랜잭션 안에서 기다리면 DB 커넥션이 그만큼 묶여 풀이 마른다 |
 | 정합성 검사 | 원장 목록 조회 `GET /external/reservations` 로 읽는다. 본 서비스는 `external_mock` 스키마를 직접 조회하지 않는다(2026-10-06 팀 결정 — 실제 외부 시스템처럼 API 로만) |
@@ -65,7 +65,11 @@ Mock 은 남의 회사 시스템을 연기한다. 우리 오류 포맷을 따르
 | --- | --- | --- |
 | 201 (재생 포함) | — | 확정 반영 |
 | 409 | `KEY_CANCELED` | 취소된 키. 확정하지 않고 현재 상태로 정리 |
-| 409 | `RESET_BUSY` | 워커는 받지 않는다. 초기화(제어 API) 전용 — 진행 중인 등록 · 취소가 있어 초기화를 거절했다 |
+| 409 | `RESET_BUSY` | 워커는 받지 않는다. 초기화(제어 API) 전용 — 진행 중인 등록 · 취소 · 응모 · 추첨이 있어 초기화를 거절했다 |
+| 409 | `DRAW_CLOSED` | 럭키드로우 — 이미 추첨한 회차에 새 응모. 저장하지 않음. DLQ (사람이 정리) |
+| 409 | `CUSTOMER_ALREADY_ENTERED` | 럭키드로우 — 같은 회차에 같은 회원의 다른 응모. 저장하지 않음. be 버그라 DLQ |
+| 409 | `ENTRY_COUNT_MISMATCH` | 럭키드로우 — 추첨 요청의 기대 응모 수 ≠ 받은 수. 아무것도 바꾸지 않음. **늦춰 다시**(다른 4xx 와 달리 확정 거절이 아니다) |
+| 422 | `INVALID_WINNER_COUNT` | 럭키드로우 — 당첨 인원 ≥ 받은 응모 수. be 는 전원 당첨이면 부르지 않으므로 be 버그. DLQ |
 | **422** | **`KEY_PAYLOAD_MISMATCH`** | **같은 키로 다른 내용이 왔다. 본 서비스 버그이므로 재시도하지 않고 오류로 남긴다** |
 | 400 | `INVALID_REQUEST` | 계약/설정 오류 |
 | 500 | `UPSTREAM_UNAVAILABLE` | 일시 실패. 주입 실패. 커밋 전이라 아무것도 저장되지 않음 |
@@ -132,7 +136,8 @@ Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RE
 | --- | --- | --- |
 | 등록 | ✅ 적용 | ✅ 적용 (기본 5%) |
 | 취소 | ❌ | ❌ — 과제 "항상 성공 가정" |
-| 조회 | ❌ | ❌ |
+| 럭키드로우 응모 · 추첨 | ✅ 등록과 같은 설정 | ✅ 등록과 같은 설정 — worker 의 재시도 시험용 |
+| 조회 (럭키드로우 회차 조회 포함) | ❌ | ❌ |
 | 설정 · 결함 · 초기화 | ❌ | ❌ |
 
 - 실패는 **커밋 전에** 발생한다. 아무것도 저장하지 않는다.
@@ -740,6 +745,282 @@ Accept: application/json
 
 ---
 
+# 럭키드로우
+
+be 의 응모비 결제 완료 응모를 한 건씩 받아 쌓고, 마감 뒤 요청을 받으면 그중 당첨 인원만큼 무작위로 뽑는다(NV-505). 부르는 쪽은
+be worker 다(`draw-register` 큐 소비기 — 2026-10-14 기준 구현 전). 계약은 be `contracts/draw-entry-sync.md` 의
+「Mock 담당과 정할 것」에 이 장이 답한다.
+
+```
+회원 응모비 결제 (order)
+  └ DRAW_ENTRY_PAID ─▶ SQS ─▶ worker ─▶ POST /external/draw-entries      응모 한 건씩 · 몇 건일지 모름 · 같은 응모가 두 번 올 수 있음
+마감 뒤 (order)
+  └ DRAW_REQUESTED(paidEntries, winnerCount) ─▶ worker
+        GET  /external/draws/{drawId}          받은 응모 수 확인 — paidEntries 와 다르면 기다렸다 다시
+        POST /external/draws/{drawId}/draw     winnerCount 명 추첨 → winnerEntryIds
+  └ DRAW_RESULT_READY ◀─ worker                order 가 당첨자 0원 주문
+```
+
+| 항목 | 규칙 |
+| --- | --- |
+| 회차 | **Mock 은 회차를 미리 모른다.** 처음 보는 `drawId` 로 응모가 오면 그 회차를 만든다 — 거절하면 응모가 전부 DLQ 로 가고, 회차 등록을 따로 두면 순서 보장이 없어 응모가 먼저 닿을 수 있다 |
+| 마감 | Mock 은 마감 시각을 모른다. **추첨 전까지 오는 응모는 모두 받는다**(be 계약 「마감 뒤에도 온다」) |
+| 식별자 | `entryId` · `drawId` 는 등록 키와 같은 규칙(영문 · 숫자 · `. _ -` 1~100자). be 는 UUID 를 보낸다. `customerId` 는 소문자 표준 UUID 만 |
+| 줄 세우기 | 응모 · 추첨은 **회차 행을 잠가** 한 줄로 선다. 추첨이 센 뒤에 응모가 끼어들어 "센 수와 뽑은 대상이 다른" 일이 없다 |
+| 지연 · 실패 | 응모 · 추첨에 등록과 같은 설정을 쓴다(「지연 · 실패 적용 범위」). 실패는 커밋 전이라 저장 · 추첨하지 않는다. 회차 조회에는 넣지 않는다. 키별 결함(응답 유실 · 느린 성공)은 걸지 않는다 |
+| 결과 불명 | 5xx · 타임아웃이면 **조회 없이 같은 요청을 다시 보낸다.** 응모(같은 `entryId`)와 추첨(같은 회차 · 같은 본문)은 재생되므로 두 번 쌓이거나 두 번 뽑히지 않는다. 응모는 추첨 뒤에 다시 보내도 재생이다. 등록의 키 조회 같은 API 는 두지 않는다 |
+| 저장 | `external_mock` 의 `draws` · `draw_entries`([schema.sql](schema.sql)). ERD 에는 아직 없다 — Mock 이 먼저 정했다 |
+| 초기화 | `POST /external/reset` 이 두 표도 비운다 |
+
+## POST /external/draw-entries
+
+| 속성 | 값 |
+| --- | --- |
+| API 이름 | 럭키드로우 응모 |
+| 기능명 | 럭키드로우 |
+| 메서드 | POST |
+
+### 요구사항
+
+- 응모를 한 건씩 받아 쌓는다. 몇 건일지 모른다.
+- 같은 응모가 다시 오면 새로 쌓지 않고 처음 결과를 준다(SQS 최소 한 번 전달 · worker 재시도).
+- 같은 회차에 같은 회원은 하나다 — be 가 보장하지만 어기면 거절한다.
+- 추첨한 회차에는 새 응모를 받지 않는다.
+
+### Request
+
+**Headers**
+
+```
+Idempotency-Key: 0199a3f2-8a10-7b21-9c32-4d5e6f708192
+Content-Type: application/json
+Accept: application/json
+```
+
+**Body** — be 봉투의 값을 그대로 옮긴다.
+
+| 필드 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `entryId` | string | 필수 | 응모 id — 봉투 `aggregateId`. **`Idempotency-Key` 와 같아야 한다**(다르면 400) |
+| `drawId` | string | 필수 | 회차 id — `payload.drawId` |
+| `customerId` | string | 필수 | 회원 id — `payload.customerId`. 소문자 표준 UUID |
+
+```json
+{
+  "entryId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+  "drawId": "0199a3f1-0000-7000-8000-000000000001",
+  "customerId": "0199a3f0-0000-7000-8000-000000000002"
+}
+```
+
+### 시스템 처리
+
+1. 지연 → 실패 판정(걸리면 500, 저장 없음). 트랜잭션 밖이다.
+2. 회차 행을 잠근다. **없으면 만든다**(`OPEN`). 처음 보는 회차로 두 응모가 동시에 오면 진 쪽은 1062 를 받고 다시 잠금 읽기로 이어간다.
+3. 같은 `entryId` 가 있으면 내용(`drawId` · `customerId`)을 비교한다 — 같으면 **재생**(추첨 뒤여도), 다르면 422 `KEY_PAYLOAD_MISMATCH`. 다른 회차로 왔으면 2단계에서 만든 회차도 롤백되어 남지 않는다.
+4. 회차가 이미 추첨됐으면 409 `DRAW_CLOSED`.
+5. 같은 회차에 같은 회원의 다른 응모가 있으면 409 `CUSTOMER_ALREADY_ENTERED`.
+6. 새 응모를 저장한다.
+
+**3 이 4 보다 먼저인 이유.** 추첨 뒤에 온 재전송은 이미 받은 응모를 다시 보낸 것이지 새 응모가 아니다. 409 로 거절하면 worker 는
+들어간 응모를 안 들어간 것으로 믿는다.
+
+### Response
+
+**201 Created** — 재생도 201. 헤더로 가른다.
+
+```
+X-Idempotent-Replay: false
+X-Mock-Config-Version: 3
+```
+
+```json
+{
+  "entryId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+  "drawId": "0199a3f1-0000-7000-8000-000000000001",
+  "customerId": "0199a3f0-0000-7000-8000-000000000002",
+  "receivedAt": "2026-10-14T03:00:00.123Z"
+}
+```
+
+재생은 처음 응답과 같은 본문에 `X-Idempotent-Replay: true` 다. 응모 수는 늘지 않는다. 당첨 여부는 싣지 않는다(회차 조회 · 추첨 응답).
+
+**주요 오류**
+
+| 응답 | errorCode | 설명 | worker |
+| --- | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | 형식 · 필드 · 헤더 오류, 본문 `entryId` ≠ `Idempotency-Key` | DLQ (다시 보내도 같다) |
+| 409 | `DRAW_CLOSED` | 추첨한 회차에 새 응모. `replayable: true` | DLQ — order 의 「드로우 추첨 뒤 결제 완료」 ERROR 와 함께 사람이 정리 |
+| 409 | `CUSTOMER_ALREADY_ENTERED` | 같은 회차에 같은 회원의 다른 응모. `replayable: true` | DLQ (be 버그) |
+| 422 | `KEY_PAYLOAD_MISMATCH` | 같은 응모 id 로 다른 회차 · 회원. 메시지에 다른 칸 이름 | DLQ (be 버그) |
+| 500 | `UPSTREAM_UNAVAILABLE` | 주입 실패. 저장 없음 | 재시도 |
+| 500 본문 없음 · HTML 502~504 | — | `failureMode=MIXED` 일 때 | 재시도 |
+
+### 확인 시나리오
+
+| 시나리오 | 기대 결과 |
+| --- | --- |
+| 처음 보는 회차로 응모 | 201, 회차 `OPEN` 생성 |
+| 같은 응모 2회 | 2회차 201 재생, 본문 같음, 응모 수 그대로 |
+| 같은 회차에 같은 회원 · 다른 응모 | 409 `CUSTOMER_ALREADY_ENTERED`, 저장 없음 |
+| 추첨 뒤 새 응모 / 이미 받은 응모 재전송 | 409 `DRAW_CLOSED` / 201 재생 |
+| 처음 보는 회차에 다른 회원 10명 동시 | 회차 1개, 응모 10건 모두 새로 (MySQL 100회) |
+| 같은 응모 10건 동시 | 새 응모 1건 + 재생 9건 (MySQL 100회) |
+| 같은 회원의 다른 응모 10건 동시 | 1건만 받고 9건 409 (MySQL 100회) |
+
+## GET /external/draws/{drawId}
+
+| 속성 | 값 |
+| --- | --- |
+| API 이름 | 럭키드로우 회차 조회 |
+| 기능명 | 럭키드로우 |
+| 메서드 | GET |
+
+### 요구사항
+
+- worker 가 추첨 전에 **Mock 이 받은 응모 수**를 결제 완료 수(`paidEntries`)와 대조할 때 부른다.
+- 추첨 결과도 준다(추첨 응답과 같은 모양).
+- 지연 · 실패를 넣지 않는다.
+
+### Request
+
+**Headers**
+
+```
+Accept: application/json
+```
+
+| 경로 변수 | 설명 |
+| --- | --- |
+| `drawId` | 회차 id. 영문 · 숫자 · `. _ -` 1~100자. 아니면 400(404 가 아니다 — "아직 응모가 없다" 와 섞이지 않게) |
+
+### 시스템 처리
+
+1. 회차 · 받은 응모 수 · 당첨 응모를 **REPEATABLE READ** 한 트랜잭션으로 읽는다. 문장마다 그때의 커밋을 보면 그 사이에 추첨이 커밋될 때 "`OPEN` 인데 당첨이 있는" 응답이 나간다. 잠그지 않으므로 응모 · 추첨을 막지 않는다.
+2. 진행 중(커밋 전)인 응모는 세지 않는다 — worker 는 수가 다르면 기다렸다 다시 대조한다(be 계약).
+
+### Response
+
+**200 OK** — 응모 받는 중
+
+```json
+{
+  "drawId": "0199a3f1-0000-7000-8000-000000000001",
+  "status": "OPEN",
+  "entryCount": 1523,
+  "winnerCount": null,
+  "winnerEntryIds": [],
+  "drawnAt": null
+}
+```
+
+| 필드 | 설명 |
+| --- | --- |
+| `status` | `OPEN`(응모 받는 중) / `DRAWN`(추첨 끝 — 이후 새 응모는 409) |
+| `entryCount` | 이 회차로 받은 응모 수. 추첨 뒤에는 늘지 않는다 |
+| `winnerCount` · `drawnAt` | `DRAWN` 일 때만 값이 있고, 그 전에는 생략하지 않고 `null` |
+| `winnerEntryIds` | 당첨 응모 id, 뽑힌 순서. `OPEN` 이면 **빈 배열**(`null` 이 아니다) |
+
+**주요 오류**
+
+| 응답 | errorCode | 설명 |
+| --- | --- | --- |
+| 404 | `NOT_FOUND` | **이 회차로 받은 응모가 아직 없다.** 응모 수 0 으로 읽으면 된다 |
+| 400 | `INVALID_REQUEST` | `drawId` 형식 오류 |
+
+## POST /external/draws/{drawId}/draw
+
+| 속성 | 값 |
+| --- | --- |
+| API 이름 | 럭키드로우 추첨 |
+| 기능명 | 럭키드로우 |
+| 메서드 | POST |
+
+### 요구사항
+
+- 받은 응모 중 `winnerCount` 명을 **겹치지 않게, 모두 같은 확률로** 뽑는다. 1명도 되고 여러 명도 된다.
+- 회차마다 한 번이다. 같은 요청이 다시 오면 다시 뽑지 않고 처음 결과를 준다(회차 id 가 멱등 키 — `Idempotency-Key` 헤더를 받지 않는다).
+
+### Request
+
+**Headers**
+
+```
+Content-Type: application/json
+Accept: application/json
+```
+
+**Body**
+
+| 필드 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| `winnerCount` | integer | 필수 | 당첨 인원 — `DRAW_REQUESTED.payload.winnerCount`. 1 이상, 받은 응모 수보다 작아야 한다 |
+| `expectedEntryCount` | integer | 선택 | 기대 응모 수 — `payload.paidEntries`. 1 이상. **없으면 수를 확인하지 않는다** |
+
+```json
+{
+  "winnerCount": 10,
+  "expectedEntryCount": 1523
+}
+```
+
+**`expectedEntryCount` 를 두는 이유.** be 계약은 "조회로 수를 대조한 뒤 추첨" 이라 두 호출 사이에 응모가 하나 더 닿으면 대조는 맞았는데
+추첨 대상이 달라진다. 추첨 요청에 기대 수를 실으면 Mock 이 회차를 잠근 채 세고 뽑으므로 그 틈이 없다.
+
+**선택 칸인 이유.** worker 의 판정(`MockJudge`)은 `errorCode` 가 있는 4xx 를 모두 "다시 보내도 같다(REJECTED)" 로 읽는다. 이 칸을
+보내려면 worker 가 409 `ENTRY_COUNT_MISMATCH` 를 "늦춰 다시" 로 읽어야 한다. 그 처리를 넣기 전에는 보내지 않으면 계약 그대로(조회 → 추첨) 동작한다.
+
+### 시스템 처리
+
+1. 지연 → 실패 판정(걸리면 500, 추첨하지 않음). 트랜잭션 밖이다.
+2. 회차 행을 잠근다. **없으면** 기대 수를 보냈을 때 409 `ENTRY_COUNT_MISMATCH`(받은 수 0), 안 보냈을 때 404 `NOT_FOUND`. 회차를 만들지 않는다 — 회차는 응모가 만든다.
+3. 이미 추첨했으면 요청(`winnerCount` · `expectedEntryCount`)을 저장된 값과 비교한다 — 같으면 **저장된 결과를 재생**(200, `X-Idempotent-Replay: true`), 다르면 422 `KEY_PAYLOAD_MISMATCH`.
+4. `expectedEntryCount` 가 있고 받은 응모 수와 다르면 409 `ENTRY_COUNT_MISMATCH`. 아무것도 바꾸지 않는다. 메시지에 받은 수를 담는다.
+5. `winnerCount` ≥ 받은 응모 수면 422 `INVALID_WINNER_COUNT`(be 는 전원 당첨이면 부르지 않는다).
+6. 응모 중 `winnerCount` 개를 뽑는다 — `SecureRandom` 으로 부분 Fisher–Yates 셔플(남은 후보 중 하나를 고르게 골라 앞으로 빼기를 당첨 인원만큼). 당첨 응모에 뽑힌 순서(1부터)를 적고 회차를 `DRAWN` 으로 바꾼다.
+
+### Response
+
+**200 OK** — 재생도 200. 헤더로 가른다(`X-Idempotent-Replay` · `X-Mock-Config-Version`).
+
+```json
+{
+  "drawId": "0199a3f1-0000-7000-8000-000000000001",
+  "status": "DRAWN",
+  "entryCount": 1523,
+  "winnerCount": 10,
+  "winnerEntryIds": ["0199a3f2-…", "0199a3f2-…"],
+  "drawnAt": "2026-10-14T04:00:00.000Z"
+}
+```
+
+회차 조회와 같은 모양이다. `winnerEntryIds` 는 정확히 `winnerCount` 개, 겹치지 않고, 그 회차가 받은 응모 중에서다(be 계약
+`DRAW_RESULT_READY` 조건). 순서는 뽑힌 순서이며 뜻은 없다. worker 는 이 목록을 그대로 order 에 넘긴다.
+
+**주요 오류**
+
+| 응답 | errorCode | 설명 | worker |
+| --- | --- | --- | --- |
+| 409 | `ENTRY_COUNT_MISMATCH` | 받은 수 ≠ 기대 수(처음 보는 회차는 받은 수 0). 아무것도 바꾸지 않음 | **늦춰 다시**(가시성 지연) — be 계약의 "다르면 기다렸다 다시 대조" |
+| 404 | `NOT_FOUND` | 기대 수 없이 받은 응모가 없는 회차 | 늦춰 다시 (응모가 아직 안 닿음) |
+| 422 | `KEY_PAYLOAD_MISMATCH` | 추첨한 회차에 다른 당첨 인원 · 기대 수. 메시지에 다른 칸 이름 | DLQ (be 버그) |
+| 422 | `INVALID_WINNER_COUNT` | 당첨 인원 ≥ 받은 응모 수 | DLQ (be 버그) |
+| 400 | `INVALID_REQUEST` | 형식 오류, `winnerCount` 없음 · 1 미만, `expectedEntryCount` 1 미만, 모르는 필드 | DLQ |
+| 500 | `UPSTREAM_UNAVAILABLE` | 주입 실패. 추첨하지 않음 | 재시도 |
+
+### 확인 시나리오
+
+| 시나리오 | 기대 결과 |
+| --- | --- |
+| 응모 5건 · 2명 추첨 | 200 `DRAWN`, 겹치지 않는 2명, 회차 조회와 같은 응답 |
+| 같은 추첨 2회 | 2회차 200 재생, 같은 결과 |
+| 기대 수 4 · 받은 수 3 → 응모 1건 더 → 다시 | 409 `ENTRY_COUNT_MISMATCH`("받은 수=3") → 200 |
+| 같은 추첨 10건 동시 | 추첨 1번 + 재생 9번, 10건 모두 같은 당첨 (MySQL 100회) |
+| 추첨 1건과 새 응모 5건 동시 | 추첨이 센 수 = 실제로 들어간 응모 수, 늦은 응모는 409 (MySQL 100회) |
+| 5명 중 1명 × 5만 번 | 각자 1만 ± 500 번 — 모두 같은 확률 |
+
+---
+
 # 설정
 
 ## GET /external/config
@@ -1084,10 +1365,10 @@ Accept: application/json
 
 ### 요구사항
 
-- 등록·멱등·취소 기록을 지운다. **설정은 유지한다.**
+- 등록·멱등·취소 기록과 럭키드로우 회차 · 응모를 지운다. **설정은 유지한다.**
 - 이전 시험의 잔량이 다음 대조에 섞이지 않게 한다.
 - 실수 실행을 막기 위해 확인 문자열을 요구한다.
-- **시험 사이에만 부른다.** 진행 중인 등록 · 취소가 있으면 지우지 않고 409 로 거절한다.
+- **시험 사이에만 부른다.** 진행 중인 등록 · 취소 · 응모 · 추첨이 있으면 지우지 않고 409 로 거절한다.
 
 ### Request
 
@@ -1113,8 +1394,8 @@ Accept: application/json
 ### 시스템 처리
 
 1. 확인 문자열이 `RESET` 인지 검사한다. 아니면 400.
-2. 진행 중인 등록 · 취소가 있으면 **아무것도 지우지 않고** 409 `RESET_BUSY` 로 거절한다. 기다리지 않는다.
-3. 등록 행과 취소 표식, 멱등 기록을 지운다. 지우는 동안 들어온 등록 · 취소는 초기화가 커밋될 때까지 기다린다.
+2. 진행 중인 등록 · 취소 · 응모 · 추첨이 있으면 **아무것도 지우지 않고** 409 `RESET_BUSY` 로 거절한다. 기다리지 않는다.
+3. 등록 행과 취소 표식, 멱등 기록을 지운다. 럭키드로우 응모 · 회차도 지운다. 지우는 동안 들어온 요청은 초기화가 커밋될 때까지 기다린다.
 4. 주입된 결함도 함께 지운다.
 5. 지연·실패 설정과 설정 버전은 그대로 둔다.
 6. 지운 건수를 반환한다.
@@ -1133,21 +1414,28 @@ ACTIVE 로 살아난다.** `TIMEOUT` · 결함으로 붙잡힌 요청도 진행 
 
 ```json
 {
-  "deletedCount": 4821
+  "deletedCount": 4821,
+  "deletedDrawEntries": 1523,
+  "deletedDraws": 1
 }
 ```
+
+| 필드 | 설명 |
+| --- | --- |
+| `deletedCount` | 지운 **등록 원장** 행 수(등록 + 취소 표식). 럭키드로우 전부터 있던 칸이라 뜻을 바꾸지 않는다 |
+| `deletedDrawEntries` · `deletedDraws` | 지운 럭키드로우 응모 · 회차 수 |
 
 **주요 오류**
 
 | 응답 | errorCode | 설명 |
 | --- | --- | --- |
 | 400 | `INVALID_REQUEST` | `confirm` 누락 또는 값 불일치 |
-| 409 | `RESET_BUSY` | 진행 중인 등록 · 취소가 있다. 메시지에 건수가 나온다. 아무것도 지우지 않았다 |
+| 409 | `RESET_BUSY` | 진행 중인 등록 · 취소 · 응모 · 추첨이 있다. 메시지에 건수가 나온다. 아무것도 지우지 않았다 |
 
 ```json
 {
   "errorCode": "RESET_BUSY",
-  "errorMessage": "진행 중인 등록 · 취소가 1건 있어 초기화할 수 없습니다. 끝난 뒤 다시 부르세요.",
+  "errorMessage": "진행 중인 등록 · 취소 · 응모 · 추첨이 1건 있어 초기화할 수 없습니다. 끝난 뒤 다시 부르세요.",
   "replayable": false,
   "externalNumber": null
 }
