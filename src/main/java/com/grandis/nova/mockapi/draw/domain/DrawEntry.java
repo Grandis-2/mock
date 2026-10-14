@@ -9,6 +9,9 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
 import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import org.springframework.data.domain.Persistable;
 
@@ -78,6 +81,23 @@ public class DrawEntry implements Persistable<String> {
     @Override
     public boolean isNew() {
         return isNew;
+    }
+
+    /**
+     * 같은 응모 id 의 재요청과 저장된 내용이 다른 칸. 비어 있으면 같은 응모다(재생).
+     *
+     * <p>등록 원장({@code Registration#differingFields})과 같은 방식이다 — 저장된 칸을 직접 비교해 어느 칸이 달라
+     * 거절됐는지 알려 준다. 이름은 거절 메시지에 그대로 쓰이므로 요청 필드 이름이다.
+     */
+    public List<String> differingFields(String drawId, UUID customerId) {
+        List<String> fields = new ArrayList<>(2);
+        if (!Objects.equals(this.drawId, drawId)) {
+            fields.add("drawId");
+        }
+        if (!Objects.equals(this.customerId, customerId)) {
+            fields.add("customerId");
+        }
+        return fields;
     }
 
     public String entryId() {
