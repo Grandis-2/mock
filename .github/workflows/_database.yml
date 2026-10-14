@@ -1,0 +1,39 @@
+name: _database
+
+# 역할: external_mock 마이그레이션(db/)을 검증한다. 일회용 MySQL 컨테이너에서만 돌고 운영 DB · AWS 에는 닿지 않는다.
+# 보는 것: 파일 이름 · 버전 규칙, 합쳐진 파일을 고치지 않았는지, 빈 DB 에 적용되는지.
+# 내용은 db/verify.sh 에 있다 — 로컬에서도 같은 명령으로 돌린다.
+on:
+  workflow_call:
+    inputs:
+      base:
+        description: 비교 기준 커밋. 여기 있던 마이그레이션은 바뀌면 안 된다. 비우면 그 검사만 건너뛴다
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0   # 기준 커밋과 비교해야 한다
+          persist-credentials: false
+
+      - name: verify
+        env:
+          BASE: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          # 기준을 못 찾으면(첫 푸시 · 강제 푸시) 불변성 검사만 뺀다. 나머지는 그대로 돈다
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] \
+             || ! git cat-file -e "$BASE^{commit}" 2> /dev/null; then
+            echo "::notice::비교 기준을 찾을 수 없어 합쳐진 마이그레이션의 불변성 검사를 건너뛴다"
+            unset BASE
+          fi
+          bash db/verify.sh
