@@ -25,9 +25,10 @@ import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.MountableFile;
 
 /**
- * 럭키드로우 응모의 동시성. 진짜 MySQL 로 본다.
+ * 럭키드로우 응모 · 추첨의 동시성. 진짜 MySQL 로 본다. 컨테이너를 하나만 띄우려고 둘을 한 클래스에 둔다.
  *
- * <p>응모는 회차 행 잠금과 중복 키(1062)에 기댄다. H2 는 둘 다 다르게 동작하므로 여기서 통과해야 의미가 있다. 스키마는
+ * <p>응모는 회차 행 잠금과 중복 키(1062)에, 추첨은 같은 회차 행 잠금에 기댄다. H2 는 둘 다 다르게 동작하므로 여기서 통과해야
+ * 의미가 있다. 스키마는
  * {@code docs/schema.sql} 을 그대로 넣는다({@code ddl-auto=validate} 로 엔티티와 맞는지도 확인된다).
  *
  * <p><b>서버의 격리 수준은 MySQL 기본값(REPEATABLE READ) 그대로 둔다</b> — 등록 시험({@code RegistrationConcurrencyTest})과
@@ -40,7 +41,7 @@ import org.testcontainers.utility.MountableFile;
         "spring.jpa.hibernate.ddl-auto=validate",
         "spring.datasource.hikari.maximum-pool-size=20"
 })
-class DrawEntryConcurrencyTest {
+class DrawConcurrencyTest {
 
     @Container
     @ServiceConnection
@@ -61,6 +62,9 @@ class DrawEntryConcurrencyTest {
 
     @Autowired
     private DrawEntryService service;
+
+    @Autowired
+    private DrawService draws;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -84,7 +88,7 @@ class DrawEntryConcurrencyTest {
                 calls.add(() -> service.enter(entryId, command));
             }
 
-            List<Outcome> outcomes = runConcurrently(calls);
+            var outcomes = runConcurrently(calls);
 
             assertThat(outcomes).as("round %d", round).allSatisfy(outcome -> {
                 assertThat(outcome.error()).isNull();
@@ -107,7 +111,7 @@ class DrawEntryConcurrencyTest {
                 calls.add(() -> service.enter(entryId, command));
             }
 
-            List<Outcome> outcomes = runConcurrently(calls);
+            var outcomes = runConcurrently(calls);
 
             assertThat(outcomes).as("round %d", round).allSatisfy(outcome -> assertThat(outcome.error()).isNull());
             assertThat(outcomes).as("round %d", round)
@@ -129,7 +133,7 @@ class DrawEntryConcurrencyTest {
                 calls.add(() -> service.enter(entryId, new DrawEntryCommand(drawId, customerId)));
             }
 
-            List<Outcome> outcomes = runConcurrently(calls);
+            var outcomes = runConcurrently(calls);
 
             assertThat(outcomes).as("round %d", round).filteredOn(outcome -> outcome.error() == null).hasSize(1);
             assertThat(outcomes).as("round %d", round).filteredOn(outcome -> outcome.error() != null)
@@ -155,7 +159,7 @@ class DrawEntryConcurrencyTest {
                 calls.add(() -> service.enter(entryId, command));
             }
 
-            List<Outcome> outcomes = runConcurrently(calls);
+            var outcomes = runConcurrently(calls);
 
             assertThat(outcomes).as("round %d", round).allSatisfy(outcome -> {
                 assertThat(outcome.error()).isNull();
@@ -164,31 +168,103 @@ class DrawEntryConcurrencyTest {
         }
     }
 
-    /** 시험이 기대한 거절(409)도 결과로 모은다. 그 밖의 예외는 그대로 남겨 단정에서 드러나게 한다. */
-    private record Outcome(DrawEntryResult result, Throwable error) {
+    /** 같은 추첨 요청을 두 번 받아도 추첨은 한 번이어야 한다(be 계약 — 회차 id 가 멱등 키). */
+    @Test
+    @DisplayName("같은 회차 추첨 10건 동시 × 100회 - 추첨은 1번, 나머지 9건은 같은 결과의 재생")
+    void sameDrawConcurrently() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            String drawId = UUID.randomUUID().toString();
+            openDraw(drawId, 5);
+            List<Callable<DrawResult>> calls = new ArrayList<>(CONCURRENT);
+            for (int i = 0; i < CONCURRENT; i++) {
+                calls.add(() -> draws.draw(drawId, new DrawCommand(2, null)));
+            }
+
+            var outcomes = runConcurrently(calls);
+
+            assertThat(outcomes).as("round %d", round).allSatisfy(outcome -> assertThat(outcome.error()).isNull());
+            assertThat(outcomes).as("round %d", round)
+                    .filteredOn(outcome -> !outcome.result().replayed()).hasSize(1);
+            List<String> winners = outcomes.getFirst().result().state().winnerEntryIds();
+            assertThat(outcomes).as("round %d", round)
+                    .allSatisfy(outcome -> assertThat(outcome.result().state().winnerEntryIds()).isEqualTo(winners));
+            assertThat(countWinners(drawId)).as("round %d", round).isEqualTo(2);
+        }
     }
 
-    private static List<Outcome> runConcurrently(List<Callable<DrawEntryResult>> calls) throws Exception {
+    /**
+     * 추첨과 새 응모가 엇갈려도 센 수와 뽑은 대상이 같다 — 응모는 추첨 전에 들어가 대상에 들거나, 추첨 뒤에 와서 409 로 막힌다.
+     * 회차 행 잠금이 없으면 추첨이 센 뒤에 응모가 들어가 "센 수 &lt; 실제 응모" 가 되고, 그 응모는 대상에서 빠진 채 남는다.
+     */
+    @Test
+    @DisplayName("추첨 1건과 새 응모 5건 동시 × 100회 - 추첨이 센 수 = 실제로 들어간 응모 수, 늦은 응모는 409")
+    void drawWhileEntering() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            String drawId = UUID.randomUUID().toString();
+            openDraw(drawId, 5);
+            List<Callable<Object>> calls = new ArrayList<>(6);
+            calls.add(() -> draws.draw(drawId, new DrawCommand(2, null)));
+            for (int i = 0; i < 5; i++) {
+                String entryId = UUID.randomUUID().toString();
+                DrawEntryCommand command = new DrawEntryCommand(drawId, UUID.randomUUID());
+                calls.add(() -> service.enter(entryId, command));
+            }
+
+            var outcomes = runConcurrently(calls);
+
+            assertThat(outcomes.getFirst().error()).as("round %d", round).isNull();
+            DrawState drawn = ((DrawResult) outcomes.getFirst().result()).state();
+            var entered = outcomes.subList(1, outcomes.size());
+            assertThat(entered).as("round %d", round).filteredOn(outcome -> outcome.error() != null)
+                    .allSatisfy(outcome -> assertThat(outcome.error())
+                            .isInstanceOfSatisfying(MockException.class, e ->
+                                    assertThat(e.errorCode()).isEqualTo(ErrorCode.DRAW_CLOSED)));
+            long accepted = entered.stream().filter(outcome -> outcome.error() == null).count();
+
+            assertThat(drawn.entryCount()).as("round %d", round)
+                    .isEqualTo(5 + accepted)
+                    .isEqualTo(countEntries(drawId));
+            assertThat(countWinners(drawId)).as("round %d", round).isEqualTo(2);
+        }
+    }
+
+    /** 시험이 기대한 거절(409)도 결과로 모은다. 그 밖의 예외는 그대로 남겨 단정에서 드러나게 한다. */
+    private record Outcome<T>(T result, Throwable error) {
+    }
+
+    private static <T> List<Outcome<T>> runConcurrently(List<Callable<T>> calls) throws Exception {
         var start = new CountDownLatch(1);
-        List<Future<DrawEntryResult>> futures = new ArrayList<>(calls.size());
+        List<Future<T>> futures = new ArrayList<>(calls.size());
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (Callable<DrawEntryResult> call : calls) {
+            for (Callable<T> call : calls) {
                 futures.add(pool.submit(() -> {
                     start.await();
                     return call.call();
                 }));
             }
             start.countDown();
-            List<Outcome> outcomes = new ArrayList<>(calls.size());
-            for (Future<DrawEntryResult> future : futures) {
+            List<Outcome<T>> outcomes = new ArrayList<>(calls.size());
+            for (Future<T> future : futures) {
                 try {
-                    outcomes.add(new Outcome(future.get(30, TimeUnit.SECONDS), null));
+                    outcomes.add(new Outcome<>(future.get(30, TimeUnit.SECONDS), null));
                 } catch (ExecutionException e) {
-                    outcomes.add(new Outcome(null, e.getCause()));
+                    outcomes.add(new Outcome<>(null, e.getCause()));
                 }
             }
             return outcomes;
         }
+    }
+
+    /** 응모를 차례로 {@code count} 건 넣는다. */
+    private void openDraw(String drawId, int count) {
+        for (int i = 0; i < count; i++) {
+            service.enter(UUID.randomUUID().toString(), new DrawEntryCommand(drawId, UUID.randomUUID()));
+        }
+    }
+
+    private int countWinners(String drawId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM draw_entries WHERE draw_id = ? AND winner_rank IS NOT NULL",
+                Integer.class, drawId);
     }
 
     private int countDraws(String drawId) {

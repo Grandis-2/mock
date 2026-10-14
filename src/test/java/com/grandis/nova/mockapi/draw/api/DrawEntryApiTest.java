@@ -34,7 +34,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * 럭키드로우 응모 API. API 안(4-내 작업/럭키드로우 Mock API 안.md) 3장의 처리 순서를 HTTP 로 본다.
  *
  * <p>H2 라 동시성은 여기서 보지 않는다. 처음 보는 회차 · 같은 응모 · 같은 회원의 동시 요청은
- * {@code DrawEntryConcurrencyTest} 가 진짜 MySQL 로 본다. 여기서는 순서대로 부를 때의 판정만 본다.
+ * {@code DrawConcurrencyTest} 가 진짜 MySQL 로 본다. 여기서는 순서대로 부를 때의 판정만 본다.
  *
  * <p>H2 는 같은 JVM 의 다른 시험과 공유되므로 회차 · 응모 · 회원 id 는 시험마다 새로 만든다.
  */
