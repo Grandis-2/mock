@@ -28,6 +28,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
  * 초기화가 진행 중인 등록 · 취소를 막는지. 리뷰 M7 의 재현 순서를 그대로 옮겼다.
@@ -137,6 +138,46 @@ class ResetBarrierApiTest {
 
             assertThat(registration.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(201);
         }
+    }
+
+    /** 지연 중인 응모가 초기화 뒤에 커밋되면 다음 시험의 회차에 앞 시험의 응모가 섞인다. 추첨도 쓰는 요청이라 같이 센다. */
+    @Test
+    @DisplayName("지연 중인 럭키드로우 응모 · 추첨도 진행 중으로 센다 — 초기화는 409, 둘은 그대로 끝난다")
+    void resetRefusedWhileDrawRequestsInFlight() throws Exception {
+        String drawId = "barrier-draw-" + UUID.randomUUID();
+        config.update(0, 0.0, FailureMode.HTTP_5XX);
+        for (int i = 0; i < 2; i++) {
+            mvc.perform(drawEntry(UUID.randomUUID().toString(), drawId)).andExpect(status().isCreated());
+        }
+        config.update(LATENCY_MS, 0.0, FailureMode.HTTP_5XX);
+
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<MvcResult> entry = pool.submit(() ->
+                    mvc.perform(drawEntry(UUID.randomUUID().toString(), "barrier-other-" + UUID.randomUUID()))
+                            .andReturn());
+            Future<MvcResult> draw = pool.submit(() -> mvc.perform(post("/external/draws/" + drawId + "/draw")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("""
+                            {"winnerCount":1}""")).andReturn());
+            awaitInFlight(2);
+
+            mvc.perform(post("/external/reset").contentType(MediaType.APPLICATION_JSON).content(RESET))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.errorCode").value("RESET_BUSY"))
+                    .andExpect(jsonPath("$.errorMessage").value(org.hamcrest.Matchers.containsString("2건")));
+
+            assertThat(entry.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(201);
+            assertThat(draw.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(200);
+        }
+    }
+
+    private static MockHttpServletRequestBuilder drawEntry(
+            String entryId, String drawId) {
+        return post("/external/draw-entries")
+                .header("Idempotency-Key", entryId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"entryId":"%s","drawId":"%s","customerId":"%s"}""".formatted(entryId, drawId, UUID.randomUUID()));
     }
 
     @Test

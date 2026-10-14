@@ -10,7 +10,7 @@ API 계약은 [api.md](api.md), 스키마는 [schema.sql](schema.sql) 이 정본
 **여러 대로 띄울 때는 `redis`** 로 설정 · 결함을 Redis 에 둔다(아래 「설정 · 결함 공유」).
 
 저장소는 MySQL `external_mock` database 다. 본 서비스와 **같은 인스턴스의 다른 database** 이며
-cross-database 조회나 물리 FK 를 두지 않는다. 재기동해도 등록 기록이 유지된다(5.4 기록 보존).
+cross-database 조회나 물리 FK 를 두지 않는다. 재기동해도 등록 기록 · 럭키드로우 응모가 유지된다(5.4 기록 보존).
 `compose.yaml` 은 Mock 만 따로 개발할 때 쓰는 것이고, 통합할 때는 본 서비스 쪽 인스턴스에
 `external_mock` database 를 만들어 붙인다.
 
@@ -33,14 +33,19 @@ com.grandis.nova.mockapi/
 │   │               VirtualThreadGuard — 가상 스레드가 꺼져 있으면 기동 실패
 │   │               엄격한 JSON(모르는 필드 · 값이 바뀌는 타입 변환 · 중복 필드 거절, 정수 → 실수만 받음) · 응답 시각 형식
 │   ├── error/      오류 코드 · 응답 형식 · 예외 핸들러
-│   └── validation/ 키 · 번호 형식 규칙(Identifiers) — 등록 파트 · 제어 파트(결함 키)가 같이 쓴다
+│   ├── persistence/ 중복 키(1062) 재시도(DuplicateKeyRetry · DuplicateKey) — 등록 · 취소 · 럭키드로우 응모가 같이 쓴다
+│   └── validation/ 키 · 번호 형식 규칙(Identifiers) — 등록 파트 · 제어 파트(결함 키) · 럭키드로우가 같이 쓴다
 ├── registration/   등록 원장 — 등록 · 조회 · 취소 · 멱등 판정 · 채번
 │   ├── api/          컨트롤러 · 요청·응답 DTO (키 · 번호 형식은 global/validation 의 Identifiers 를 부른다)
-│   ├── application/  처리 순서 · 트랜잭션 경계 — Service · Writer · Reader · 중복 키 재시도
+│   ├── application/  처리 순서 · 트랜잭션 경계 — Service · Writer · Reader
 │   └── domain/       원장 행(엔티티) · 리포지토리 · 채번
+├── draw/           럭키드로우(NV-505) — 응모 · 회차 조회 · 추첨
+│   ├── api/          컨트롤러 2개(응모 · 회차) · 요청·응답 DTO
+│   ├── application/  응모(Service · Writer) · 추첨(Service · Writer) · 회차 조회(Reader)
+│   └── domain/       회차 · 응모 엔티티 · 리포지토리 · 당첨 뽑기(WinnerPicker)
 └── control/        Mock 조작 — 설정 · 결함 주입 · 초기화 API
-    ├── api/          컨트롤러 · 요청·응답 DTO · 초기화 장벽 필터(등록 · 취소 POST 만)
-    └── application/  초기화 · 초기화 장벽(진행 중인 등록 · 취소가 있으면 409 RESET_BUSY)
+    ├── api/          컨트롤러 · 요청·응답 DTO · 초기화 장벽 필터(등록 · 취소 · 응모 · 추첨 POST 만)
+    └── application/  초기화 · 초기화 장벽(진행 중인 쓰는 요청이 있으면 409 RESET_BUSY)
 ```
 
 **패키지는 같이 바뀌는 것끼리 묶는다.** `api` 는 [api.md](api.md) 가 바뀔 때, `application` 은 아래 처리
@@ -48,11 +53,13 @@ com.grandis.nova.mockapi/
 domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 아래층 어디든 쓸 수 있어 응답 DTO 는 엔티티
 (`Registration`)를 직접 읽는다. 거꾸로는 안 되므로 처리 층은 요청 DTO 대신 `RegisterCommand` 를 받는다.
 `control` 에는 자기 테이블이 없어 `domain` 이 없다 — 설정 · 결함 보관소는 등록 파트와의 계약이라
-`global/chaos` 에 있고, 초기화가 지우는 것은 등록 원장이다.
+`global/chaos` 에 있고, 초기화가 지우는 것은 등록 원장과 럭키드로우 표다. `draw` 는 등록과 따로 바뀌는 기능이라 패키지를
+나눴고(be 계약 `draw-entry-sync.md` 가 바뀔 때 고치는 곳), 같은 세 층을 따른다.
 
-층 밖에서 쓰지 않는 클래스는 package-private 으로 숨긴다(`DuplicateKeyRetry` · `DuplicateKey`). 같은 층끼리만
-쓰므로 나눠도 숨김이 유지된다. 키 형식 규칙(`Identifiers`)은 제어 파트도 결함을 거는 키에 써야 해서
-`global/validation` 에 공개로 둔다. 결함 키도 이 규칙으로 검사한다(`FaultController`) — 등록이 받지 않는 키에 걸면 영원히 발동하지 않는다.
+층 밖에서 쓰지 않는 클래스는 package-private 으로 숨긴다. 여러 파트가 같은 규칙을 써야 하는 것만 `global` 에 공개로
+둔다 — 키 형식 규칙(`Identifiers`)은 제어 파트도 결함을 거는 키에 써야 해서 `global/validation` 에, 중복 키 재시도
+(`DuplicateKeyRetry` · `DuplicateKey`)는 럭키드로우 응모도 같은 상한으로 다시 시도해야 해서 `global/persistence` 에
+있다(NV-505 에서 `registration.application` 에서 옮김). 결함 키도 이 규칙으로 검사한다(`FaultController`) — 등록이 받지 않는 키에 걸면 영원히 발동하지 않는다.
 
 지연·실패 주입은 **등록 처리 안에서** 부른다. 필터에 두면 조회·취소에도 걸리는데, 과제가 취소를
 "항상 성공" 으로 가정하고 정합성 조회까지 느려지기 때문이다.
@@ -89,7 +96,7 @@ domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 �
 
 취소도 같은 구조다. `CancellationService`(트랜잭션 밖)가 중복 키면 다시 시도하고, 한 번의 시도는
 `CancellationWriter` 가 키 행을 잠근 트랜잭션으로 한다. 1062 재시도 루프는 `DuplicateKeyRetry` 하나를
-등록과 같이 쓴다. 지연 중인 등록은 아직 잠금을 쥐지 않았으므로 취소는 기다리지 않고 표식을 남기고,
+등록 · 럭키드로우 응모와 같이 쓴다. 지연 중인 등록은 아직 잠금을 쥐지 않았으므로 취소는 기다리지 않고 표식을 남기고,
 뒤늦게 진행된 등록은 그 표식에 막혀 `KEY_CANCELED` 가 된다.
 
 번호로 등록을 찾을 때(번호 조회 · 번호만 받은 취소)는 키 조회와 달리 잠금 없이 읽는다. 번호는 등록
@@ -162,10 +169,51 @@ ID 를 붙인다.
 을 500ms, `connect-timeout` 을 1s 로 둔다(설정 예시 · 운영 문서). 새 등록 하나는 Redis 를 두 번 보므로 시간 초과도 두 번
 쌓인다 — 멈춘 Redis 면 약 1.1초(500ms × 2, 시험이 2초 안을 확인), 연결부터 안 되면 약 2초(1s × 2). 둘 다 워커 읽기 5초 안이다.
 
+## 럭키드로우 (NV-505)
+
+be 가 응모를 한 건씩 보내 쌓고, 마감 뒤 추첨을 요청한다(계약은 [api.md](api.md) 「럭키드로우」). 처리 구조는 등록을 따른다 —
+지연 · 실패는 트랜잭션 밖(Service), 한 번의 시도는 READ COMMITTED 트랜잭션(Writer).
+
+**회차 행이 줄 세우는 자리다.** 응모와 추첨은 둘 다 회차 행을 `FOR UPDATE` 로 먼저 잠근다. 등록의 키 행과 같은 역할이다.
+`drawId` 는 be 관리자가 만든 드로우 하나의 id 라 다시 열리지 않고, 새 드로우는 늘 새 id 다(be 확인, 2026-10-14) — 잠금은 회차 하나
+안의 요청끼리만 줄 세운다.
+
+| 겹치는 요청 | 언제 생기나 | 잠금이 막는 것 |
+| --- | --- | --- |
+| **같은 추첨 두 건 (주된 이유)** | **정상 흐름에서도** — be → worker 전달은 최소 한 번이고, worker 도 응답을 못 받으면 다시 보낸다 | 둘 다 "아직 `OPEN`" 을 보고 각자 다른 당첨을 뽑는 일. 뒤 요청은 `DRAWN` 을 보고 처음 결과를 재생한다 — 추첨은 회차마다 한 번이다(시험에서 잠금을 빼면 첫 회차부터 동시 10건이 모두 새로 뽑았다) |
+| 같은 응모 두 건 | 정상 흐름 — SQS 중복 · worker 재전송 | 뒤 요청이 앞 응모를 보고 재생한다 |
+| 같은 회원의 다른 응모 두 건 | be 버그일 때만 | 뒤 요청이 앞 응모를 보고 409. `uq_draw_entry_customer` 가 마지막 방어선이다 |
+| 수를 맞춘 뒤 응모 하나 더 (보험) | **사고 때만** — be 는 결제 확인 중 0건을 본 뒤 추첨을 요청하고 worker 는 수를 맞춘 뒤 맡기므로 정상이면 없다. 서버 시계 차 · 결제 늦은 승인 · 수동 수정 때 | 응모는 추첨 전에 들어가 대상에 들거나, 추첨 뒤에 와서 409 로 막힌다. 잠금이 없으면 추첨이 센 뒤에 응모가 들어가 "센 수 < 실제 응모" 가 되고 그 응모는 201 을 받은 채 대상에서 빠진다(시험에서 잠금을 빼면 첫 회차부터 5 대 10 으로 깨졌다) |
+
+**처음 보는 회차는 응모가 만든다.** 없는 행은 잠글 수 없어 처음 보는 회차로 두 응모가 동시에 오면 둘 다 INSERT 하고, 진 쪽은
+1062 를 받아 `DuplicateKeyRetry` 로 새 트랜잭션에서 다시 한다(등록과 같은 장치 — 그래서 `global/persistence` 로 옮겼다).
+READ COMMITTED 가 빠지면 없는 행을 잠그는 읽기가 갭 락을 걸어 INSERT 끼리 교착한다(시험에서 빼면 1213 이 난다). 추첨은
+행을 만들지 않아 재시도가 없다.
+
+**응모의 판정 순서** — 같은 응모 id(재생 · 422) → 추첨 여부(409 `DRAW_CLOSED`) → 같은 회원(409). 재생이 추첨 여부보다
+먼저다. 추첨 뒤에 온 재전송을 409 로 거절하면 worker 는 들어간 응모를 안 들어간 것으로 믿는다.
+
+**회차 조회는 REPEATABLE READ 로 읽는다.** 회차 · 응모 수 · 당첨자를 문장 셋으로 읽는데, READ COMMITTED 면 그 사이에 추첨이
+커밋될 때 "`OPEN` 인데 당첨이 있는" 응답이 나간다. 잠금 없는 일관 읽기라 응모 · 추첨을 막지 않고 갭 락도 없다.
+
+**뽑기(`WinnerPicker`)** — 후보(응모 id 순) 중 남은 것 하나를 고르게 골라 앞으로 빼기를 당첨 인원만큼 한다(부분 Fisher–Yates).
+겹치지 않고 모든 응모가 같은 확률이다. 난수는 `SecureRandom` 이다 — 예약번호(`ThreadLocalRandom`)는 겹치지만 않으면 되지만
+추첨은 결과를 미리 알 수 없어야 한다. 당첨 응모에 뽑힌 순서(`winner_rank`, 1부터)를 적어 재생 · 조회가 같은 순서로 준다.
+
+**결함 · 키 조회는 두지 않는다.** 응모 · 추첨은 같은 요청을 다시 보내면 재생이라 결과 불명이어도 조회 없이 다시 보내면 된다.
+응답 유실 · 느린 성공 결함은 필요해지면 등록의 결함과 같은 방식으로 더한다.
+
+**초기화 장벽에 든다.** 지연 중인 응모가 초기화 뒤에 커밋되면 다음 시험의 회차에 앞 시험의 응모가 섞인다. 그래서 응모 ·
+추첨 POST 도 `ResetBarrierFilter` 가 감싸고, 초기화는 두 표도 지운다.
+
 ## 스키마
 
 `docs/schema.sql` 이 정본이다. Hibernate 가 테이블을 만들면 CHECK 제약이 빠지므로 `ddl-auto` 는
 `validate` 로 둔다. 칸을 바꿀 때는 엔티티와 이 파일을 함께 고치고 ERD 담당에게 알린다.
+
+표는 셋이다 — 등록 원장 `preorder_registrations`, 럭키드로우 `draws` · `draw_entries`. 럭키드로우 표는 Mock 이 먼저 정했고
+ERD 에는 머지 뒤 반영을 부탁한다. 표마다 `CREATE TABLE IF NOT EXISTS` 라 **이미 쓰던 DB 에 이 파일을 다시 돌려도 없는 표만
+생긴다** — compose 는 빈 볼륨일 때만 이 파일을 돌리므로, 표가 늘면 기존 DB 에는 손으로 한 번 돌린다([operations.md](operations.md) 0장).
 
 시각 칸은 `Instant` 다. 시간대 없는 `LocalDateTime` 을 쓰면 Hibernate 의 `jdbc.time_zone` 과 PC
 시간대에 따라 DB 에 9시간 밀린 값이 들어간다. 응답은 UTC `Z` 이고 밀리초까지다.
@@ -179,8 +227,9 @@ ID 를 붙인다.
 시험에서는 `src/test/resources/application.yml` 이 H2 인메모리로 지연·실패율을 0 으로 덮어쓴다.
 
 **H2 는 컨텍스트 로딩과 순서대로 부를 때의 판정용이다.** 멱등 등록과 키 조회는 잠금 · 중복 키 동작에
-기대므로 H2 에서 통과해도 MySQL 에서 통과한다는 보장이 없다. 그런 시험은 `RegistrationConcurrencyTest`
-처럼 Testcontainers 로 진짜 MySQL 8.4 를 띄워 돌린다. 스키마는 `docs/schema.sql` 을 그대로 넣는다.
+기대므로 H2 에서 통과해도 MySQL 에서 통과한다는 보장이 없다. 그런 시험은 `RegistrationConcurrencyTest` ·
+`DrawConcurrencyTest`(럭키드로우 응모 · 추첨) 처럼 Testcontainers 로 진짜 MySQL 8.4 를 띄워 돌린다. 스키마는
+`docs/schema.sql` 을 그대로 넣는다.
 
 **Docker 가 없으면 MySQL 시험만 조용히 건너뛴다.** 로컬 빌드는 초록색이라 놓치기 쉽다. 동시성을 건드렸으면
 Docker 를 켜고, 결과에서 건너뜀이 0 인지 본다.
@@ -201,6 +250,8 @@ Docker 를 켜고, 결과에서 건너뜀이 0 인지 본다.
 - 취소를 반복해도, 미등록 키를 취소해도 성공으로 처리하는가
 - 취소 뒤 늦게 도착한 등록이 `KEY_CANCELED` 로 막히는가
 - 실패율 100% 에서도 설정 API 로 되돌릴 수 있는가
+- 럭키드로우 — 처음 보는 회차에 동시 응모해도 회차는 하나인가, 같은 추첨을 동시에 보내도 추첨은 한 번인가, 추첨과 응모가
+  엇갈려도 센 수와 실제 응모 수가 같은가 (각 **100회**), 모든 응모가 같은 확률로 뽑히는가
 
 ### 시험을 쓸 때 알아둘 것
 
@@ -211,7 +262,7 @@ Docker 를 켜고, 결과에서 건너뜀이 0 인지 본다.
 | 고정 키 대신 매번 새 키를 쓴다 | H2 인메모리 DB 는 컨텍스트가 달라도 같은 JVM 에서 공유된다. 다른 클래스가 같은 키로 만든 행이 남아 있다 |
 | 시간대 버그는 DB 에 적힌 글자로 본다 | 앱 안에서는 읽을 때 되돌아가 응답이 멀쩡하다. 시험 JVM 은 `Asia/Seoul` 로 고정해 UTC 기계에서도 잡히게 한다(`build.gradle`) |
 | 응답 유실은 실제 소켓으로 본다 | MockMvc 에는 소켓이 없어 연결 끊기가 500 으로 보인다. 워커가 정말 타임아웃을 겪는지는 `ConnectionDropperE2eTest`(`RANDOM_PORT`)가 본다 |
-| 시험 패키지는 main 과 같게 나누고, package-private 을 단정하는 시험은 그 층에 둔다 | 숨긴 클래스는 같은 패키지에서만 보인다. `RegistrationApiTest` 는 이름과 달리 `registration.application` 에 있다 — 중복 키 재시도(`DuplicateKeyRetry`)를 직접 단정해서다. 앱 전체를 띄우는 시험이라 패키지가 시험 범위를 바꾸지는 않는다 |
+| 시험 패키지는 main 과 같게 나누고, package-private 을 단정하는 시험은 그 층에 둔다 | 숨긴 클래스는 같은 패키지에서만 보인다. `RegistrationApiTest` 는 이름과 달리 `registration.application` 에 있다 — 숨겨 두었던 중복 키 재시도(`DuplicateKeyRetry`)를 직접 단정하던 자리다. 재시도는 NV-505 에서 `global/persistence` 로 옮겨 공개가 됐고 시험은 자리를 그대로 둔다. 앱 전체를 띄우는 시험이라 패키지가 시험 범위를 바꾸지는 않는다 |
 
 ### 구현할 때 알아둘 것
 

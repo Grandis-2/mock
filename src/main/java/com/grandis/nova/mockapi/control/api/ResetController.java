@@ -41,6 +41,6 @@ public class ResetController {
      */
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResetResponse reset(@Valid @RequestBody ResetRequest request) {
-        return new ResetResponse(barrier.exclusively(service::reset));
+        return ResetResponse.from(barrier.exclusively(service::reset));
     }
 }
