@@ -1,9 +1,19 @@
 package com.grandis.nova.mockapi.draw.domain;
 
+import java.util.List;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 public interface DrawEntryRepository extends JpaRepository<DrawEntry, String> {
+
+    /** 그 회차로 받은 응모 수. {@code ix_draw_entry_winner}(draw_id, winner_rank) 의 앞 칸으로 센다. */
+    long countByDrawId(String drawId);
+
+    /** 그 회차의 당첨 응모 id 를 뽑힌 순서로. 추첨 전이면 비어 있다. */
+    @Query("select e.entryId from DrawEntry e where e.drawId = :drawId and e.winnerRank is not null"
+            + " order by e.winnerRank")
+    List<String> findWinnerEntryIds(String drawId);
 
     /**
      * 그 회차에 그 회원의 응모가 있는가. 회차 행을 잠근 뒤에 부르므로 같은 회차의 다른 응모와 겹치지 않는다. 겹쳐도
