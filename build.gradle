@@ -21,6 +21,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // 헬스 체크(관리 포트의 /actuator/health/readiness · liveness). 관리 포트 · 노출 범위는 MockDefaults 에 있다
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     runtimeOnly 'com.mysql:mysql-connector-j'
 
     // 여러 대로 띄울 때(mock.shared-state=redis) 설정 · 결함을 서버끼리 나눈다. 기본(memory)에서는 연결하지 않는다.
