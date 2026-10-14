@@ -244,9 +244,14 @@ class DrawConcurrencyTest {
                     return call.call();
                 }));
             }
-            // 모두 출발선에 선 뒤에 놓는다. 바로 놓으면 먼저 뜬 요청이 끝난 뒤에 나머지가 시작해 경합이 줄어든다
-            ready.await();
-            start.countDown();
+            // 모두 출발선에 선 뒤에 놓는다. 바로 놓으면 먼저 뜬 요청이 끝난 뒤에 나머지가 시작해 경합이 줄어든다.
+            // 기다리다 끊겨도(인터럽트) 출발 신호는 꼭 준다 — 안 주면 작업들이 영원히 기다리고 아래 close() 가 그 작업을 기다려
+            // 시험이 끝나지 않는다. 주면 작업들이 끝나고 예외는 그대로 올라간다.
+            try {
+                ready.await();
+            } finally {
+                start.countDown();
+            }
             List<Outcome<T>> outcomes = new ArrayList<>(calls.size());
             for (Future<T> future : futures) {
                 try {
