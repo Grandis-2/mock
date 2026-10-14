@@ -83,6 +83,11 @@ public class DrawEntry implements Persistable<String> {
         return isNew;
     }
 
+    /** 당첨으로 적는다. {@code rank} 는 뽑힌 순서(1부터)다. */
+    public void markWinner(int rank) {
+        this.winnerRank = rank;
+    }
+
     /**
      * 같은 응모 id 의 재요청과 저장된 내용이 다른 칸. 비어 있으면 같은 응모다(재생).
      *

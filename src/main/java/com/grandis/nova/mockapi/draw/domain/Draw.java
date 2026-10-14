@@ -10,6 +10,9 @@ import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 import org.springframework.data.domain.Persistable;
 
 /**
@@ -87,6 +90,31 @@ public class Draw implements Persistable<String> {
 
     public boolean isDrawn() {
         return status == DrawStatus.DRAWN;
+    }
+
+    /** 추첨했다고 적는다. 요청 두 칸을 함께 남겨 같은 회차의 추첨 요청이 다시 오면 비교한다. 다시 열지 않는다. */
+    public void markDrawn(int winnerCount, Integer expectedEntryCount, Instant drawnAt) {
+        this.status = DrawStatus.DRAWN;
+        this.winnerCount = winnerCount;
+        this.expectedEntryCount = expectedEntryCount;
+        this.drawnAt = drawnAt;
+    }
+
+    /**
+     * 이미 추첨한 회차에 다시 온 추첨 요청과 저장된 요청이 다른 칸. 비어 있으면 같은 요청이다(재생).
+     *
+     * <p>회차 id 가 추첨의 멱등 키다. 기대 수도 비교한다 — 처음에 안 보내고 다시 보낼 때 보내면 다른 요청이다. 이름은 거절
+     * 메시지에 그대로 쓰이므로 요청 필드 이름이다.
+     */
+    public List<String> differingFields(int winnerCount, Integer expectedEntryCount) {
+        List<String> fields = new ArrayList<>(2);
+        if (!Objects.equals(this.winnerCount, winnerCount)) {
+            fields.add("winnerCount");
+        }
+        if (!Objects.equals(this.expectedEntryCount, expectedEntryCount)) {
+            fields.add("expectedEntryCount");
+        }
+        return fields;
     }
 
     public String drawId() {

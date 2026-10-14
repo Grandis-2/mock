@@ -43,6 +43,16 @@ public enum ErrorCode {
     CUSTOMER_ALREADY_ENTERED(HttpStatus.CONFLICT, "같은 회차에 같은 회원의 응모가 이미 있습니다.", true),
 
     /**
+     * 럭키드로우 — 추첨 요청의 기대 응모 수({@code expectedEntryCount})가 받은 응모 수와 다르다. 아무것도 바꾸지 않는다.
+     * 응모가 더 닿으면 달라지므로 재생 결과가 아니다. 워커는 "늦춰 다시"(가시성 지연)로 읽어야 하는데, 기본 판정은 errorCode 가
+     * 있는 4xx 를 확정 거절로 읽으므로 그 처리를 넣은 뒤에만 기대 수를 보낸다(기대 수는 선택 칸).
+     */
+    ENTRY_COUNT_MISMATCH(HttpStatus.CONFLICT, "받은 응모 수가 기대 수와 다릅니다.", false),
+
+    /** 럭키드로우 — 당첨 인원이 받은 응모 수 이상이다. be 는 전원 당첨이면 Mock 을 부르지 않으므로 be 버그다. */
+    INVALID_WINNER_COUNT(HttpStatus.UNPROCESSABLE_CONTENT, "당첨 인원은 받은 응모 수보다 적어야 합니다.", false),
+
+    /**
      * 진행 중인 등록 · 취소가 있어 초기화를 거절했다. 그대로 지우면 지연 중이던 등록이 초기화 뒤에 커밋되어,
      * 취소한 키가 ACTIVE 로 살아난다. 제어 API 의 응답이라 워커는 받지 않는다. 끝난 뒤 다시 부르면 된다.
      */
