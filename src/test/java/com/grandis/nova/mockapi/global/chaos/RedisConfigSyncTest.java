@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
@@ -141,32 +143,51 @@ class RedisConfigSyncTest {
         assertThat(a.snapshot().failureRate()).isEqualTo(0.5);
     }
 
-    /** 버전을 서버마다 올리면 두 서버가 같은 버전에 다른 설정을 갖는다. 공유 저장소가 하나씩 정해야 한다. */
+    /**
+     * 버전을 서버마다 올리면 두 서버가 같은 버전에 다른 설정을 갖는다. 공유 저장소가 하나씩 정해야 한다.
+     *
+     * <p>버전 중복은 Lua 가 막지만, 변경의 기록 · 적용과 알림을 받은 다시 읽기가 끼어드는 순서는 한 번 통과로 증명되지 않는다
+     * (저장소 규칙: 최소 100회). 회차마다 그 회차의 시작 버전을 기준으로 마지막 버전을 계산해 두 서버가 맞는지 본다. 공용 풀은
+     * 코어가 적은 CI 에서 동시성이 낮아지므로 쓰는 쪽마다 전용 스레드를 둔다.
+     */
     @Test
-    @DisplayName("두 서버가 동시에 바꿔도 버전이 겹치지 않고, 끝나면 모두 마지막 설정으로 맞는다")
+    @DisplayName("두 서버가 동시에 바꿔도 버전이 겹치지 않고, 끝나면 모두 마지막 설정으로 맞는다 (100회)")
     void concurrentChangesGetDistinctVersions() throws Exception {
         MockConfigStore a = server();
         MockConfigStore b = server();
         int perServer = 20;
-        ConcurrentLinkedQueue<Integer> versions = new ConcurrentLinkedQueue<>();
-        CountDownLatch go = new CountDownLatch(1);
+        int rounds = 100;
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < rounds; round++) {
+                int base = a.snapshot().configVersion();
+                ConcurrentLinkedQueue<Integer> versions = new ConcurrentLinkedQueue<>();
+                CountDownLatch ready = new CountDownLatch(2);
+                CountDownLatch go = new CountDownLatch(1);
 
-        List<CompletableFuture<Void>> writers = List.of(a, b).stream()
-                .map(store -> CompletableFuture.runAsync(() -> {
-                    await(go);
-                    IntStream.range(0, perServer).forEach(i ->
-                            versions.add(store.update(500, i / 100.0, FailureMode.HTTP_5XX)
-                                    .snapshot().configVersion()));
-                }))
-                .toList();
-        go.countDown();
-        CompletableFuture.allOf(writers.toArray(CompletableFuture[]::new)).get();
+                List<CompletableFuture<Void>> writers = List.of(a, b).stream()
+                        .map(store -> CompletableFuture.runAsync(() -> {
+                            ready.countDown();
+                            await(go);
+                            IntStream.range(0, perServer).forEach(i ->
+                                    versions.add(store.update(500, i / 100.0, FailureMode.HTTP_5XX)
+                                            .snapshot().configVersion()));
+                        }, pool))
+                        .toList();
+                // 둘 다 출발선에 선 뒤에 놓는다. 바로 놓으면 한쪽이 20번을 다 끝낸 뒤에 다른 쪽이 시작할 수 있다
+                await(ready);
+                go.countDown();
+                CompletableFuture.allOf(writers.toArray(CompletableFuture[]::new)).get();
 
-        assertThat(versions).doesNotHaveDuplicates().hasSize(perServer * 2);
-        int last = perServer * 2;
-        awaitVersion(a, last);
-        awaitVersion(b, last);
-        assertThat(a.snapshot()).isEqualTo(b.snapshot());
+                assertThat(versions).as("회차 %d", round).doesNotHaveDuplicates().hasSize(perServer * 2);
+                int last = base + perServer * 2;
+                awaitVersion(a, last);
+                awaitVersion(b, last);
+                assertThat(a.snapshot()).as("회차 %d", round).isEqualTo(b.snapshot());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     /**
