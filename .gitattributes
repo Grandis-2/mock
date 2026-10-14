@@ -1,3 +1,5 @@
 /gradlew text eol=lf
+# 컨테이너 · CI 에서 bash 로 돈다. CRLF 로 받으면 첫 줄부터 깨진다
+*.sh text eol=lf
 *.bat text eol=crlf
 *.jar binary

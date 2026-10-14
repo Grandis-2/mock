@@ -1,0 +1,6 @@
+# 컨텍스트는 실행 jar 와 AOT 캐시면 된다. 나머지를 보내면 빌드가 느려지고, 로컬의 application.yml · .env 가 섞일 수 있다.
+# -plain.jar 는 의존성이 없는 jar 라 실행되지 않는다. 섞이면 Dockerfile 의 COPY 가 jar 둘을 받아 실패한다.
+*
+!build/libs/*.jar
+build/libs/*-plain.jar
+!build/aot/app.aot
