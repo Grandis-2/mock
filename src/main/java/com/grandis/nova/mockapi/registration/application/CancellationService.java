@@ -2,6 +2,7 @@ package com.grandis.nova.mockapi.registration.application;
 
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
+import com.grandis.nova.mockapi.global.persistence.DuplicateKeyRetry;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import org.springframework.stereotype.Service;
