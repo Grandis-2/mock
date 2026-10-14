@@ -1,5 +1,7 @@
 package com.grandis.nova.mockapi.control.application;
 
+import com.grandis.nova.mockapi.draw.domain.DrawEntryRepository;
+import com.grandis.nova.mockapi.draw.domain.DrawRepository;
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;
 import org.springframework.stereotype.Service;
@@ -9,7 +11,8 @@ import org.springframework.transaction.annotation.Transactional;
  * 시험 사이에 기록을 비운다.
  *
  * <p>등록 행과 취소 표식은 같은 표의 행이라 한 번에 지워진다. 멱등 판정도 그 키 행이 근거이므로
- * 따로 지울 것이 없다.
+ * 따로 지울 것이 없다. 럭키드로우의 회차 · 응모도 함께 지운다 — 남겨 두면 다음 시험이 같은 회차 id 를 쓸 때 앞 시험의
+ * 응모가 섞이고, 추첨한 회차면 새 응모가 409 로 막힌다.
  *
  * <p><b>설정은 건드리지 않는다.</b> 이 클래스가 설정 저장소를 아예 주입받지 않는 것이 그 증거다.
  * 지연·실패율과 {@code configVersion} 은 그대로 남는다 — 설정이 메모리라 초기화가 함께 지우면
@@ -22,15 +25,20 @@ import org.springframework.transaction.annotation.Transactional;
 public class ResetService {
 
     private final RegistrationRepository repository;
+    private final DrawEntryRepository drawEntries;
+    private final DrawRepository draws;
     private final InMemoryFaultStore faults;
 
-    public ResetService(RegistrationRepository repository, InMemoryFaultStore faults) {
+    public ResetService(RegistrationRepository repository, DrawEntryRepository drawEntries, DrawRepository draws,
+                        InMemoryFaultStore faults) {
         this.repository = repository;
+        this.drawEntries = drawEntries;
+        this.draws = draws;
         this.faults = faults;
     }
 
     /**
-     * 등록 기록과 걸려 있는 결함을 지운다.
+     * 등록 기록 · 럭키드로우 회차와 응모 · 걸려 있는 결함을 지운다.
      *
      * <p><b>{@code deleteAll()} 이 아니라 {@code deleteAllInBatch()} 여야 한다.</b> 앞엣것은 행을
      * 전부 읽어와 {@code em.remove()} 로 표시만 하고 실제 DELETE 는 커밋할 때 나간다. 그러면 아래
@@ -42,17 +50,25 @@ public class ResetService {
      * <p>그래서 결함을 마지막에 지운다. 메모리는 롤백되지 않으므로, 먼저 지우면 지우기가 실패했을 때
      * 결함만 사라진다.
      *
-     * <p>건수는 세어 보고 지운다. <b>진행 중인 등록 · 취소가 없을 때만 불린다</b> — 컨트롤러가
-     * {@link ResetBarrier} 로 감싸, 있으면 409 로 거절하고 이 메서드가 끝날 때까지 새 등록 · 취소를
-     * 붙잡아 둔다. 그래서 세는 문장과 지우는 문장 사이에 등록이 커밋되지 않는다.
+     * <p>건수는 세어 보고 지운다. <b>진행 중인 등록 · 취소 · 응모 · 추첨이 없을 때만 불린다</b> — 컨트롤러가
+     * {@link ResetBarrier} 로 감싸, 있으면 409 로 거절하고 이 메서드가 끝날 때까지 새 요청을
+     * 붙잡아 둔다. 그래서 세는 문장과 지우는 문장 사이에 등록 · 응모가 커밋되지 않는다.
+     *
+     * <p><b>여러 대({@code mock.shared-state=redis})면 이 보장은 초기화를 받은 서버 안에서만이다.</b>
+     * {@link ResetBarrier} 는 서버마다 따로라 다른 서버의 진행 중인 등록은 세지도 막지도 못한다. 그때는 요청이 없을 때만
+     * 초기화한다(api.md {@code POST /external/reset} · operations.md 2-6).
      *
      * @return 지운 행 수
      */
     @Transactional
-    public long reset() {
-        long deletedCount = repository.count();
+    public ResetResult reset() {
+        long registrations = repository.count();
         repository.deleteAllInBatch();
+        long entries = drawEntries.count();
+        drawEntries.deleteAllInBatch();
+        long drawCount = draws.count();
+        draws.deleteAllInBatch();
         faults.clear();
-        return deletedCount;
+        return new ResetResult(registrations, entries, drawCount);
     }
 }

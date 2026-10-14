@@ -6,6 +6,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.grandis.nova.mockapi.draw.domain.Draw;
+import com.grandis.nova.mockapi.draw.domain.DrawEntry;
+import com.grandis.nova.mockapi.draw.domain.DrawEntryRepository;
+import com.grandis.nova.mockapi.draw.domain.DrawRepository;
 import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.FaultHook;
 import com.grandis.nova.mockapi.global.chaos.FaultType;
@@ -54,6 +58,12 @@ class ResetApiTest {
     @Autowired
     private RegistrationRepository repository;
 
+    @Autowired
+    private DrawRepository draws;
+
+    @Autowired
+    private DrawEntryRepository drawEntries;
+
     /** 지우기와 결함 비우기의 순서를 보려면 {@code clear()} 가 불리는 순간을 가로채야 한다. */
     @MockitoSpyBean
     private InMemoryFaultStore faults;
@@ -77,6 +87,8 @@ class ResetApiTest {
     @BeforeEach
     void emptyEverything() {
         repository.deleteAll();
+        drawEntries.deleteAllInBatch();
+        draws.deleteAllInBatch();
         faults.clear();
     }
 
@@ -122,7 +134,32 @@ class ResetApiTest {
     void emptyIsZero() throws Exception {
         reset(CONFIRMED)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.deletedCount").value(0));
+                .andExpect(jsonPath("$.deletedCount").value(0))
+                .andExpect(jsonPath("$.deletedDrawEntries").value(0))
+                .andExpect(jsonPath("$.deletedDraws").value(0));
+    }
+
+    /**
+     * 남겨 두면 다음 시험이 같은 회차 id 를 쓸 때 앞 시험의 응모가 섞이고, 추첨한 회차면 새 응모가 409 로 막힌다.
+     * {@code deletedCount} 는 등록 원장만이다 — 뜻이 바뀌면 지운 등록 수를 읽던 쪽이 엉뚱한 수를 본다.
+     */
+    @Test
+    @DisplayName("럭키드로우 회차 · 응모도 지우고 건수를 따로 돌려준다 - deletedCount 는 등록 원장만")
+    void deletesDrawsAndEntries() throws Exception {
+        saveActive("reset-with-draw-1");
+        String drawId = "reset-draw-" + UUID.randomUUID();
+        draws.save(Draw.open(drawId, Instant.now()));
+        drawEntries.save(DrawEntry.received("reset-entry-1-" + UUID.randomUUID(), drawId, UUID.randomUUID(), Instant.now()));
+        drawEntries.save(DrawEntry.received("reset-entry-2-" + UUID.randomUUID(), drawId, UUID.randomUUID(), Instant.now()));
+
+        reset(CONFIRMED)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.deletedCount").value(1))
+                .andExpect(jsonPath("$.deletedDrawEntries").value(2))
+                .andExpect(jsonPath("$.deletedDraws").value(1));
+
+        assertThat(draws.count()).isZero();
+        assertThat(drawEntries.count()).isZero();
     }
 
     /**

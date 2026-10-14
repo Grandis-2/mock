@@ -69,6 +69,15 @@ curl http://localhost:8081/external/config
 be 의 UUID 전환(NV-326)과 **같은 때** 바꾼다 — 새 Mock 은 숫자 id 를, 옛 Mock 은 UUID 를 400 으로 거절하므로 한쪽만 바뀐 사이의 등록은
 모두 실패한다. 순서: be 워커 · Mock 정지 → 원장 비우고 칸 변경 → 새 Mock 기동 → be 배포(마이그레이션이 남은 동기화 작업도 비운다) → 워커 재개.
 
+**NV-505(럭키드로우) 이전에 만든 DB 에는 `draws` · `draw_entries` 표가 없어 그대로 뜨지 않는다**(`ddl-auto: validate` 가
+없는 표로 기동을 멈춘다). compose 는 빈 볼륨일 때만 `schema.sql` 을 돌리기 때문이다. **지우지 말고** 이 파일을 한 번 다시
+돌린다 — 표마다 `CREATE TABLE IF NOT EXISTS` 라 없는 표만 생기고 등록 원장은 그대로다(2026-10-14 확인: 옛 스키마 DB 에 두 번
+돌려 오류 없이 표 2개만 생기고 기존 행이 남음).
+
+```bash
+docker exec -i nova-mock-mysql mysql -uroot -proot < docs/schema.sql     # .env 의 컨테이너 이름 · root 비밀번호를 바꿨으면 그 값으로
+```
+
 ## 1. Mock 조절 — 지연과 실패율
 
 재기동 없이 바꾼다. 시연 조작 패널이다.
@@ -293,9 +302,10 @@ docker exec nova-mock-mysql mysql -unova -pnova -N \
 | 같은 키 5개 재요청 | **전부 같은 번호 + `X-Idempotent-Replay: true`** |
 | 재요청 후 건수 | 여전히 5건 — **중복 등록 없음** |
 
-> **재기동하면 설정이 기본값으로 돌아간다.** 실측으로 `configVersion` 1 → 0, 지연 500ms · 실패율
-> 0.05 로 복귀했다. 설정이 메모리에 있기 때문이며 명세가 정한 동작이다.
-> **시연에서 재기동을 보여준 뒤에는 조작 패널 값을 반드시 다시 넣어야 한다.**
+> **재기동하면 설정이 기본값으로 돌아간다(한 대 · `mock.shared-state=memory`).** 실측으로 `configVersion` 1 → 0,
+> 지연 500ms · 실패율 0.05 로 복귀했다. 설정이 메모리에 있기 때문이며 명세가 정한 동작이다.
+> **시연에서 재기동을 보여준 뒤에는 조작 패널 값을 반드시 다시 넣어야 한다.** 여러 대(`redis`)면 재기동해도 공유된
+> 설정이 남는다(2-6).
 
 ### 2-3. 커밋 직후 강제 종료 · 재기동 — 확인함 (2026-09-27)
 
@@ -348,12 +358,13 @@ curl -X POST localhost:8081/external/reset -H 'Content-Type: application/json' \
   -d '{"confirm":"RESET"}'
 ```
 
-확인 문자열이 틀리면 400 이고 **아무것도 지우지 않는다.** 등록 행과 취소 표식을 지우고 지운 수를
-돌려주며, **지연·실패 설정과 `configVersion` 은 남긴다.**
+확인 문자열이 틀리면 400 이고 **아무것도 지우지 않는다.** 등록 행과 취소 표식, 럭키드로우 회차 · 응모를 지우고
+지운 수를 돌려주며(`deletedCount` 는 등록 원장만, 럭키드로우는 `deletedDrawEntries` · `deletedDraws`), **지연·실패
+설정과 `configVersion` 은 남긴다.**
 
-**진행 중인 등록 · 취소가 있으면 409 `RESET_BUSY` 로 거절하고 아무것도 지우지 않는다.** 메시지에 건수가
-나온다. 지연 중이던 등록이 초기화 뒤에 커밋되어, 취소한 키가 ACTIVE 로 살아나는 것을 막는다.
-`TIMEOUT` · 결함으로 붙잡힌 요청도 진행 중으로 세므로 유지 시간(기본 7초) 동안은 거절된다.
+**진행 중인 등록 · 취소 · 응모 · 추첨이 있으면 409 `RESET_BUSY` 로 거절하고 아무것도 지우지 않는다.** 메시지에 건수가
+나온다. 지연 중이던 등록이 초기화 뒤에 커밋되어, 취소한 키가 ACTIVE 로 살아나는 것을 막는다(응모면 다음 시험의 회차에
+섞이는 것을 막는다). `TIMEOUT` · 결함으로 붙잡힌 요청도 진행 중으로 세므로 유지 시간(기본 7초) 동안은 거절된다.
 
 > **시연 중 409 를 받으면** 지연을 0 으로 내리고, 진행 중인 요청이 끝날 만큼(설정해 둔 최대 지연 + 유지
 > 시간) 기다린 뒤 다시 부른다. 취소 경합 프리셋(지연 6~14초) 직후에 특히 잘 걸린다.
@@ -375,6 +386,9 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | ④ 지연이 끝난 등록 | **201 · ACTIVE** (취소가 사라짐) | **409 `KEY_CANCELED`** — 표식이 남아 있어서 |
 | ⑤ 초기화 다시 | — | 200 · `deletedCount: 1` (표식) |
 | ⑥ K 키 조회 | 200 · ACTIVE | **404** · DB 0행 |
+
+(2026-10-01 기록이다. NV-505 부터 ③ 의 문구는 "진행 중인 등록 · 취소 · 응모 · 추첨이 1건" 이고, ⑤ 응답에
+`deletedDrawEntries` · `deletedDraws` 가 함께 나온다.)
 
 ### 2-5. 5xx 종류별 응답 — `MIXED` (NV-312)
 
@@ -409,7 +423,99 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 응답에도 표식 헤더 `X-Mock-Injected-Failure: HTTP_503` 이 붙는다. 부하 판정이 주입 실패를 가르는 데 쓰는 **시험용**
 헤더라 실제 장비는 보내지 않는다 — **워커는 이 헤더로 분기하지 않는다.**
 
-되돌릴 때는 `failureMode` 를 빼고(기본 `HTTP_5XX`) 다시 `PUT` 한다. 재기동해도 기본값으로 돌아간다.
+되돌릴 때는 `failureMode` 를 빼고(기본 `HTTP_5XX`) 다시 `PUT` 한다. 한 대(memory)면 재기동해도 기본값으로 돌아간다.
+
+### 2-6. 여러 대로 띄우기 — 설정 · 결함을 Redis 로 공유 (NV-467)
+
+한 대로 처리량이 모자라 여러 대를 띄우면, 요청은 서버마다 나뉘어 간다. 기본(`mock.shared-state=memory`)은 설정 · 결함이
+서버 메모리라 **실패율을 바꾼 서버만 바뀐다** — 2026-10-13 두 대로 확인: 한 대만 30% 로 바꾸고 100건씩 보내니
+실패가 32건 · 10건으로 갈렸다. 여러 대일 때는 `redis` 로 띄운다. 등록 기록은 원래 MySQL 하나라 그대로다.
+
+| | 메모리(기본, 한 대) | Redis(여러 대) |
+| --- | --- | --- |
+| 실패율 · 지연 바꾸기 | 받은 서버만 | **모든 서버** — 바꾼 서버 즉시, 다른 서버는 알림으로 수 ms(놓치면 10초 안) |
+| 결함 | 건 서버로 간 요청에만 | **어느 서버에 걸든** 그 키의 등록을 받은 서버에서, **모든 서버를 통틀어 한 번** |
+| 재기동 | 설정이 기본값으로 | **공유된 설정을 따른다** |
+| 초기화 | 원장 · 결함 | 원장 · 결함(모든 서버 몫). 진행 중인 요청은 받은 서버 것만 세므로 **요청이 없을 때만** 초기화한다 |
+
+**로컬에서 띄우기** — MySQL 과 Redis 는 하나씩, Mock 은 포트만 바꿔 여러 개.
+
+```bash
+docker compose --profile redis up -d     # MySQL + Redis (Redis 는 이 프로필에서만 뜬다)
+./gradlew bootJar
+```
+```bash
+# 터미널마다 포트만 바꾼다 (8081 · 8082 · …)
+java -jar build/libs/nova-0.0.1-SNAPSHOT.jar --server.port=8081 --mock.shared-state=redis \
+  --spring.data.redis.timeout=500ms --spring.data.redis.connect-timeout=1s
+```
+
+`application.yml` 에 `mock.shared-state: redis` 와 `spring.data.redis.host · port · timeout · connect-timeout` 을 적어 두면
+인자를 줄일 수 있다(예시 파일 주석).
+
+**Redis 시간 초과는 꼭 짧게 둔다(`spring.data.redis.timeout: 500ms` · `connect-timeout: 1s`) — 없으면 redis 모드는 뜨지
+않는다.** 둘 중 하나라도 없거나, 두 배가 `worker-read-timeout-ms` 의 절반을 넘으면(기본 5초면 1250ms 초과) 기동 로그에 어느 값인지
+나오고 멈춘다
+(`RedisTimeoutGuard`). redis 모드는 등록마다
+결함을 Redis 에서 꺼내 본다(결함이 없어도 1~2번). Redis 가 멈추면 그 시간만큼 기다린 뒤에야 결함 없음으로 넘어가는데,
+정하지 않으면 Lettuce 기본 60초라 그동안 모든 등록이 멈추고 워커(읽기 5초)에는 Mock 전체가 먹통으로 보인다. 새 등록
+하나는 결함을 두 번 보므로 시간 초과도 두 번 쌓인다 — 500ms 면 멈춘 Redis 에서 **약 1.1초**(500ms × 2. `RedisFaultSharingTest`
+의 멈춤 시험이 2초 안을 확인한다), 연결부터 안 되면 약 2초(연결 1s × 2)가 더해진다. 둘 다 워커 읽기 5초 안이다. 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
+5대가 1.3GB 로 떴다. **한 PC 에 여러 대는 동작 확인용이다.** CPU · 메모리를 나눠 쓰므로 처리량은 늘지 않는다.
+
+**확인** — 한 대에서 바꾸고 다른 서버를 본다.
+
+```bash
+curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
+  -d '{"registerLatencyMs":500,"failureRate":0.3}'
+curl localhost:8082/external/config      # failureRate 0.3 · 같은 configVersion 이면 된다
+```
+
+2026-10-13 로컬 5대(8081~8085)로 확인한 것: 한 대에서 바꾼 실패율이 0.3초 안에 5대 모두 같은 버전 · 두 서버에서 동시에
+바꿔도 버전이 겹치지 않고 5대 모두 마지막 값 · 30% 에서 50건씩 실패 24~36% · 8085 에 건 응답 유실이 8081 로 간 그 키
+등록에서 한 번만 발동(다른 4대 로그 0)하고 8083 재시도는 201 재생 · 재기동한 서버가 기본값이 아니라 공유 설정으로 뜸.
+
+**Redis 에 무엇이 있나**(문제를 볼 때) — `docker exec nova-mock-redis redis-cli HGETALL mock:config`(설정 · 버전) ·
+`HGETALL mock:faults`(걸린 결함). 서버 로그에는 다른 서버의 변경을 받을 때 `다른 서버가 바꾼 설정을 반영한다 configVersion=…` 가 남는다.
+
+**운영** — Redis 를 따로 띄우지 않고 be 가 쓰는 Redis 에 붙는다. 인프라 `mock/service.yml` 에 `redis: main` 을 두면 접속
+정보(`spring.data.redis.host · port · ssl`)가 들어온다. **시간 초과는 들어오지 않으므로** 인프라의 `mock/application.yml` 에
+`spring.data.redis.timeout` · `connect-timeout` 을 함께 적는다(위 — 빠지면 Mock 이 뜨지 않는다). 키는 `mock:` 으로 시작해 be 의 키와 섞이지 않는다. 대수(`scaling`)와
+worker 의 `mock-max-instances`(Mock 대수에 맞춘 동시 호출 상한)는 인프라 담당이 함께 바꾼다.
+
+### 2-7. 럭키드로우 — 응모 · 추첨 해 보기 (NV-505)
+
+be worker 가 아직 없어 손으로 부른다. 계약은 [api.md](api.md) 「럭키드로우」. 처음 보는 회차는 첫 응모가 만든다.
+
+```bash
+# 응모 3건 — 회원 id 는 소문자 UUID 여야 한다
+for i in 1 2 3; do
+  curl -X POST localhost:8081/external/draw-entries -H 'Content-Type: application/json' \
+    -H "Idempotency-Key: demo-entry-$i" \
+    -d "{\"entryId\":\"demo-entry-$i\",\"drawId\":\"demo-draw-1\",\"customerId\":\"0199a3f0-0000-7000-8000-00000000000$i\"}"
+done
+
+curl localhost:8081/external/draws/demo-draw-1                       # OPEN · entryCount 3 · winnerEntryIds []
+
+curl -i -X POST localhost:8081/external/draws/demo-draw-1/draw \
+  -H 'Content-Type: application/json' -d '{"winnerCount":1}'          # 200 · DRAWN · 당첨 1명
+```
+
+2026-10-14 실제 MySQL · HTTP 로 확인한 것(임시 DB, 포트만 다름):
+
+| 순서 | 결과 |
+| --- | --- |
+| 응모 3건 | 201 × 3 |
+| `demo-entry-1` 다시 | 201 · `X-Idempotent-Replay: true` · 처음과 같은 `receivedAt` |
+| 회차 조회 | `OPEN` · `entryCount: 3` · `winnerEntryIds: []` |
+| 1명 추첨 | 200 · `DRAWN` · `winnerEntryIds: ["demo-entry-3"]` |
+| 같은 추첨 다시 | 200 · `X-Idempotent-Replay: true` · **같은 당첨**(다시 뽑지 않음) |
+| 추첨 뒤 `demo-entry-4` | 409 `DRAW_CLOSED` |
+| 초기화 | `{"deletedCount":0,"deletedDrawEntries":3,"deletedDraws":1}` |
+
+**같은 회차 id 로 다시 해 보려면 초기화한다** — 추첨한 회차는 다시 열지 않는다. 시연에서는 회차 id 를 바꿔 가며 해도 된다.
+추첨 인원은 1명도 여러 명도 되지만 받은 응모 수보다 작아야 한다(같거나 크면 422 — be 는 전원 당첨이면 Mock 을 부르지 않는다).
+실패율을 올려 두면 응모 · 추첨도 그 비율로 500 이 나고 저장 · 추첨하지 않는다 — worker 재시도 시험용이다.
 
 ## 3. 부하 실행
 
@@ -637,7 +743,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | --- | --- |
 | 정합성 검사는 Mock 을 어떻게 읽나 | 원장 목록 조회 `GET /external/reservations`(외부 키 커서 페이지)로 받는다(2026-10-06 팀 결정). 실제 외부 시스템이면 DB 를 볼 수 없으니 API 로만 읽는다. 키 조회는 본 서비스가 아는 키만 물을 수 있어 "Mock 에만 있는 등록" 을 찾으려면 목록이 필요하다 |
 | 지연이 평균 500ms 인가, 고정인가 | **평균이다**(요구사항 그대로, NV-121). 균등분포로 300~700ms 사이에서 흔든다. 흔들어도 부하 판정이 되는 이유는 균등분포라 주입한 지연의 p95(680ms)를 미리 알 수 있어서다. 아래 참고 |
-| Mock 을 여러 개 띄우면 안 되나 | 설정·결함이 메모리라 2개 이상이면 설정 변경이 한쪽에만 적용되고, 결함을 건 키의 요청이 다른 쪽으로 가면 발동하지 않는다. 등록 기록은 DB 라 영향이 없다 |
+| Mock 을 여러 개 띄우면 안 되나 | **된다 — `mock.shared-state=redis` 로.** 기본(memory)은 설정 · 결함이 메모리라 여러 대면 설정 변경이 받은 서버에만 적용되고 결함도 그 서버로 간 요청에만 걸린다. redis 면 Redis 로 나눠 한 대에서 바꿔도 모두 바뀐다(2-6, 로컬 5대로 확인). 등록 기록은 원래 DB 라 영향이 없다 |
 | 5xx 를 접수 실패 중 어디에 세나 | **"일시 실패" 로 따로 센다.** 400·409·422 는 다시 보내도 결과가 같은 확정 거절이지만 5xx 는 재시도 대상이라 뜻이 정반대다. 합쳐 두면 설정한 실패율이 거절 수에 묻힌다 — 나눠 보니 `baseline` 의 일시 실패가 251건(5.0%)으로 `failureRate` 0.05 와 정확히 맞았다 |
 | 결함 주입은 과제에 없는데 왜 넣었나 | 요구사항 8장이 *"외부 성공 응답 유실을 재현해 원래 신청의 처리 지속 확인"* 을 요구한다. 과제의 5% 실패는 모두 **커밋 전**이라 "등록은 됐는데 응답이 사라진" 상황을 만들 수 없고, 확률이라 시연 중 원하는 순간에 일어나지도 않는다. 결함은 키를 지정해 **커밋 후**에 한 번 확실히 일으킨다(2-1) |
 | 과제는 실패 5% 인데 시연 1~3번은 왜 실패율 0 인가 | 1~3번은 멱등성을 보여주는 순서라 무작위 500 이 끼면 설명과 상관없는 장면이 된다. 5% 로 두면 세 요청 중 한 번이라도 500 이 날 확률이 1 − 0.95³ ≈ 14% 다. **조절이 되는 것**은 4번(실패율 1.0 → 0.0)에서, **5% 가 실제로 나오는 것**은 부하 결과(`baseline` 5xx 4.8 ~ 5.5%, [load-test.md](load-test.md))로 보여준다 |

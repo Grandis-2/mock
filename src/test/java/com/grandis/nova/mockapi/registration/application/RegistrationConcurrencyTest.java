@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.error.ErrorCode;
 import com.grandis.nova.mockapi.global.error.MockException;
+import com.grandis.nova.mockapi.global.persistence.DuplicateKey;
 import com.grandis.nova.mockapi.registration.RegisterBodies;
 import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
 import com.grandis.nova.mockapi.registration.domain.Registration;

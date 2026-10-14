@@ -5,6 +5,7 @@ import com.grandis.nova.mockapi.global.chaos.ConfigSnapshot;
 import com.grandis.nova.mockapi.global.chaos.ConnectionDropper;
 import com.grandis.nova.mockapi.global.chaos.FailureInjector;
 import com.grandis.nova.mockapi.global.chaos.FaultHook;
+import com.grandis.nova.mockapi.global.persistence.DuplicateKeyRetry;
 import com.grandis.nova.mockapi.registration.application.RegistrationWriter.Attempt;
 import org.springframework.stereotype.Service;
 

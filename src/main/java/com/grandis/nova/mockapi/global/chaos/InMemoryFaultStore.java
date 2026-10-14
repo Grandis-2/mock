@@ -1,28 +1,34 @@
 package com.grandis.nova.mockapi.global.chaos;
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
+import com.grandis.nova.mockapi.global.chaos.FaultStorage.StoredFault;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * 키마다 걸어둔 결함을 들고 있는 메모리 보관소.
+ * 키마다 걸어 둔 결함을 걸고 꺼낸다. 결함 API · 초기화 · 등록 파트가 쓰는 입구다.
  *
- * <p>DB 에 두지 않는다. 결함은 시험·시연 중에만 쓰는 일회용 장치이고, 재기동하면 사라지는 편이
- * 매번 같은 초기 상태에서 시작하는 데 유리하다. 설정과 같은 이유로 <b>Mock 은 프로세스 1개로
- * 띄운다</b> — 2개 이상이면 결함을 건 키의 요청이 다른 쪽으로 가서 발동하지 않는다.
+ * <p>결함을 실제로 두는 곳은 {@link FaultStorage} 다 — 한 대면 메모리(기본), 여러 대면 Redis
+ * ({@code mock.shared-state=redis}). 여러 대를 메모리로 띄우면 결함을 건 키의 요청이 다른 서버로 가서 발동하지 않는다.
+ * 이름의 "InMemory" 는 메모리뿐이던 때 붙인 것이다.
  */
 @Component
 public class InMemoryFaultStore implements FaultHook {
 
-    /** 걸어 둔 결함 하나. 기다리는 시간은 느린 성공에만 쓴다(응답 유실은 0). */
-    private record Fault(FaultType type, long delayMs) {
-    }
-
     private static final Logger log = LoggerFactory.getLogger(InMemoryFaultStore.class);
 
-    private final ConcurrentHashMap<String, Fault> faults = new ConcurrentHashMap<>();
+    private final FaultStorage faults;
+
+    @Autowired
+    public InMemoryFaultStore(FaultStorage faults) {
+        this.faults = faults;
+    }
+
+    /** 메모리에 두는 보관소. 단위 시험이 쓴다. */
+    public InMemoryFaultStore() {
+        this(new MemoryFaultStorage());
+    }
 
     /** 같은 키에 이미 결함이 있으면 새 결함으로 바꾼다. 기다리는 시간이 없는 결함(응답 유실)이다. */
     public void inject(String externalKey, FaultType faultType) {
@@ -31,7 +37,7 @@ public class InMemoryFaultStore implements FaultHook {
 
     /** 같은 키에 이미 결함이 있으면 새 결함으로 바꾼다. 범위 검사는 결함 API 가 한다. */
     public void inject(String externalKey, FaultType faultType, long delayMs) {
-        faults.put(externalKey, new Fault(faultType, delayMs));
+        faults.put(externalKey, new StoredFault(faultType, delayMs));
     }
 
     /**
@@ -53,7 +59,7 @@ public class InMemoryFaultStore implements FaultHook {
      */
     @Override
     public long holdBeforeCommit(String externalKey) {
-        Fault fault = take(externalKey, FaultType.SLOW_SUCCESS);
+        StoredFault fault = take(externalKey, FaultType.SLOW_SUCCESS);
         if (fault == null) {
             return 0;
         }
@@ -63,22 +69,11 @@ public class InMemoryFaultStore implements FaultHook {
     }
 
     /**
-     * 그 종류의 결함이 걸려 있으면 꺼내며 지운다. 다른 종류의 결함은 그대로 둔다.
-     *
-     * <p>읽기와 지우기를 {@code computeIfPresent} 한 번으로 한다. {@code get} 뒤에 {@code remove(key, value)} 로 나누면
-     * 그 틈에 같은 종류 · 같은 대기 시간으로 다시 건 결함까지 지운다 — {@link Fault} 가 record 라 값이 같으면 같은 결함으로
-     * 보기 때문이다. 한 번에 하면 동시에 꺼내도 한 쪽만 받고, 꺼낸 뒤에 새로 건 결함은 남는다.
+     * 그 종류의 결함이 걸려 있으면 꺼내며 지운다. 다른 종류의 결함은 그대로 둔다. 꺼내기와 지우기를 한 번에 하는 것은
+     * 보관소({@link FaultStorage#take})가 맡는다.
      */
-    private Fault take(String externalKey, FaultType type) {
-        AtomicReference<Fault> taken = new AtomicReference<>();
-        faults.computeIfPresent(externalKey, (key, fault) -> {
-            if (fault.type() != type) {
-                return fault;
-            }
-            taken.set(fault);
-            return null;
-        });
-        Fault fault = taken.get();
+    private StoredFault take(String externalKey, FaultType type) {
+        StoredFault fault = faults.take(externalKey, type);
         if (fault != null) {
             // 실패 주입 로그(DefaultFailureInjector)와 같은 모양이다. be 로그와 키로 맞대 본다.
             // 기다리는 시간은 느린 성공에만 있다 — 응답 유실에 delayMs=0 을 찍으면 "0ms 기다렸다" 로 읽힌다
@@ -93,7 +88,7 @@ public class InMemoryFaultStore implements FaultHook {
 
     /** 시험용 — 결함이 아직 걸려 있는가. 꺼내기와 기다리기의 순서를 볼 때 쓴다. */
     boolean pending(String externalKey) {
-        return faults.containsKey(externalKey);
+        return faults.contains(externalKey);
     }
 
     /**

@@ -23,6 +23,8 @@ import com.grandis.nova.mockapi.global.chaos.FailureMode;
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
 import com.grandis.nova.mockapi.global.chaos.MockConfigStore;
 import com.grandis.nova.mockapi.global.config.MockProperties;
+import com.grandis.nova.mockapi.global.persistence.DuplicateKey;
+import com.grandis.nova.mockapi.global.persistence.DuplicateKeyRetry;
 import com.grandis.nova.mockapi.registration.domain.ExternalNumberGenerator;
 import com.grandis.nova.mockapi.registration.domain.Registration;
 import com.grandis.nova.mockapi.registration.domain.RegistrationRepository;

@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.mockapi.global.chaos.InMemoryFaultStore;
+import com.grandis.nova.mockapi.global.chaos.MemoryFaultStorage;
 import com.grandis.nova.mockapi.global.config.StrictJsonConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -27,10 +28,10 @@ import org.springframework.test.web.servlet.ResultActions;
  *
  * <p>{@code controllers=} 로 범위를 좁힌다. 안 좁히면 새 컨트롤러가 생길 때마다 이 시험이 깨진다.
  * 슬라이스는 {@link StrictJsonConfig} 와 보관소를 스캔하지 않아 {@code @Import} 로 넣는다 — 보관소는
- * 목이 아니라 실물이라 정말 걸렸는지까지 볼 수 있다.
+ * 목이 아니라 실물이라 정말 걸렸는지까지 볼 수 있다. 결함을 실제로 두는 곳은 한 대 기본값인 메모리다.
  */
 @WebMvcTest(controllers = FaultController.class)
-@Import({StrictJsonConfig.class, InMemoryFaultStore.class})
+@Import({StrictJsonConfig.class, InMemoryFaultStore.class, MemoryFaultStorage.class})
 class FaultApiTest {
 
     private static final String PATH = "/external/faults";

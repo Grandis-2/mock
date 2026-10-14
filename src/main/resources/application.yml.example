@@ -69,6 +69,23 @@ mock:
   # be 워커의 HTTP 읽기 타임아웃(be worker 설정 read-timeout: 5s). Mock 은 위 규칙을 확인하는 데만 쓴다.
   # 워커 값이 바뀌면 이 줄과 timeout-hold-ms 를 함께 옮긴다.
   worker-read-timeout-ms: 5000
+  # 설정 · 결함을 둘 곳. 한 대면 memory(기본). 여러 대로 띄우면 redis 로 바꾼다 — memory 로 여러 대를 띄우면
+  # 실패율을 바꾼 서버만 바뀐다. redis 면 아래 spring.data.redis 접속 정보가 있어야 한다.
+  shared-state: memory
+
+# shared-state: redis 일 때만 쓴다. 로컬은 compose 의 Redis, 운영은 인프라가 주입한다(spring.data.redis.host · port · ssl).
+# timeout · connect-timeout 은 인프라가 넣지 않으므로 운영에도 이 두 줄을 둔다. redis 면 등록마다 결함을 Redis 에서 꺼내
+# 보는데, Redis 가 멈추면 이 시간만큼 기다린 뒤에야 결함 없음으로 넘어간다. 정하지 않으면 Lettuce 기본(명령 60초 · 연결
+# 10초)이라 그동안 모든 등록이 멈추고 워커(읽기 5초)에는 Mock 전체가 먹통으로 보인다. 그래서 redis 모드는 두 줄이 없거나,
+# 두 배가 worker-read-timeout-ms 의 절반을 넘으면 뜨지 않는다(RedisTimeoutGuard — 등록 하나가 Redis 를 두 번 보고, 나머지
+# 절반은 지연 · 처리 몫). 기본 워커 5초면 둘 다 1250ms 까지다.
+# spring:
+#   data:
+#     redis:
+#       host: localhost
+#       port: 6379
+#       timeout: 500ms
+#       connect-timeout: 1s
 
 logging:
   level:

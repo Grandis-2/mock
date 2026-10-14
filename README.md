@@ -37,7 +37,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 **Docker 가 켜져 있어야 MySQL 시험(Testcontainers)까지 돈다.** 꺼져 있으면 그 시험만 조용히 건너뛰고
 빌드는 초록색이다. 동시성을 건드렸으면 결과에서 건너뜀이 0 인지 본다.
 
-## API — 9개
+## API — 12개
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
@@ -46,6 +46,9 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | GET | `/external/reservations/{externalNumber}` | 번호로 단건 조회 |
 | GET | `/external/reservations/by-key/{externalKey}` | 키로 등록 상태 조회 |
 | POST | `/external/cancellations` | 예약 취소 |
+| POST | `/external/draw-entries` | 럭키드로우 응모 (멱등 — 응모 id) |
+| GET | `/external/draws/{drawId}` | 럭키드로우 회차 조회 (받은 응모 수 · 추첨 결과) |
+| POST | `/external/draws/{drawId}/draw` | 럭키드로우 추첨 (멱등 — 회차 id) |
 | GET · PUT | `/external/config` | 지연·실패 설정 조회 · 변경 |
 | POST | `/external/faults` | 결함 주입 (응답 유실) |
 | POST | `/external/reset` | 기록 초기화 |
@@ -57,8 +60,9 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
   지연 중인 등록은 404 로 보이므로 404 만 보고 포기하지 않는다. 같은 키로 취소하는 것은 예약을 취소로 끝낼 때뿐이다
 - 멱등 키는 본 서비스의 `preorder_token` 이다. 대소문자를 구별하고 영문 · 숫자 · `. _ -` 로 된 1~100자다
 - 요청 본문에 계약에 없는 필드가 있으면 400 이다
-- 지연 · 실패는 등록에만 주입한다. 조회 · 취소 · 설정에는 없어서 실패율 100% 에서도 되돌릴 수 있다
-- **프로세스 1개로 띄운다.** 설정 · 결함이 메모리라 2개 이상이면 갈린다
+- 지연 · 실패는 등록과 럭키드로우 응모 · 추첨에만 주입한다. 조회 · 취소 · 설정에는 없어서 실패율 100% 에서도 되돌릴 수 있다
+- 기본은 **1개**로 띄운다(설정 · 결함이 메모리). **여러 대면 `mock.shared-state=redis`** — 설정 · 결함을 Redis 로 나눠
+  한 대에서 바꿔도 모두 바뀐다([operations.md](docs/operations.md) 2-6)
 - 정합성 검사는 `external_mock` 스키마를 직접 조회하지 않고 원장 목록 조회 API 로 읽는다
 
 ## 문서

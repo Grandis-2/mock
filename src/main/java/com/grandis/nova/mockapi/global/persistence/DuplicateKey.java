@@ -1,4 +1,4 @@
-package com.grandis.nova.mockapi.registration.application;
+package com.grandis.nova.mockapi.global.persistence;
 
 import java.sql.SQLException;
 import org.springframework.dao.DuplicateKeyException;
@@ -13,7 +13,7 @@ import org.springframework.dao.DuplicateKeyException;
  * <p>그 밖의 무결성 위반(CHECK · NOT NULL)은 Mock 의 버그라 재시도하면 안 된다. 그래서 무결성
  * 위반 전체가 아니라 중복 키만 골라낸다.
  */
-final class DuplicateKey {
+public final class DuplicateKey {
 
     /** MySQL ER_DUP_ENTRY. */
     private static final int MYSQL_DUPLICATE_ENTRY = 1062;
@@ -24,7 +24,7 @@ final class DuplicateKey {
     private DuplicateKey() {
     }
 
-    static boolean isCause(Throwable e) {
+    public static boolean isCause(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
             if (t instanceof DuplicateKeyException) {
                 return true;

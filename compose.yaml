@@ -51,5 +51,22 @@ services:
       timeout: 5s
       retries: 20
 
+  # Mock 을 여러 대로 띄울 때(mock.shared-state=redis)만 쓴다. 설정 · 결함을 서버끼리 나눈다.
+  # 평소 docker compose up 에는 뜨지 않는다 — docker compose --profile redis up -d 로 켠다.
+  # 운영은 이 컨테이너가 아니라 be 가 쓰는 Redis(인프라 service.yml 의 redis: main)에 붙는다.
+  redis:
+    image: redis:8
+    container_name: ${REDIS_CONTAINER_NAME:-nova-mock-redis}
+    profiles: [ "redis" ]
+    ports:
+      # MySQL 과 같은 이유로 기본은 이 PC 에서만 받는다. 비밀번호가 없으므로 다른 장비의 Mock 이 붙어야 할 때만
+      # .env 의 REDIS_BIND=0.0.0.0 으로 열고, 시험이 끝나면 되돌린다.
+      - "${REDIS_BIND:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 volumes:
   mock-mysql-data:
