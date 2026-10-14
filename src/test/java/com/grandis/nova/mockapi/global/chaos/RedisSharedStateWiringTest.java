@@ -19,7 +19,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * 다른 시험들은 Redis 없이 뜨므로, 이 조합이 맞게 엮이는지는 여기서만 확인된다.
  */
 @Testcontainers(disabledWithoutDocker = true)
-@SpringBootTest(properties = "mock.shared-state=redis")
+@SpringBootTest(properties = {
+        "mock.shared-state=redis",
+        // redis 모드는 시간 초과가 없으면 뜨지 않는다(RedisTimeoutGuard). 설정 예시의 권장값과 같다
+        "spring.data.redis.timeout=500ms",
+        "spring.data.redis.connect-timeout=1s"
+})
 class RedisSharedStateWiringTest {
 
     @Container
