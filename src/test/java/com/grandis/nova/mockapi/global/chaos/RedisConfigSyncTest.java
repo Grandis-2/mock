@@ -16,6 +16,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
@@ -305,18 +307,30 @@ class RedisConfigSyncTest {
         slowRedis.afterPropertiesSet();
         var docker = REDIS.getDockerClient();
         docker.pauseContainerCmd(REDIS.getContainerId()).exec();
+        // 첫 시도가 실패한 뒤에 되살린다. 정해 둔 시간 뒤에 되살리면 첫 명령이 늦을 때 다시 시도 없이 붙어도 통과한다.
+        CountDownLatch firstFailure = new CountDownLatch(1);
+        AtomicInteger waits = new AtomicInteger();
         CompletableFuture<Void> resume = CompletableFuture.runAsync(() -> {
-            sleep(1500);
-            docker.unpauseContainerCmd(REDIS.getContainerId()).exec();
+            try {
+                firstFailure.await(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                docker.unpauseContainerCmd(REDIS.getContainerId()).exec();
+            }
         });
         try {
             RedisConfigSync sync = new RedisConfigSync(slowRedis, idleListeners(slow), JSON, SAFETY,
-                    new StartupRetry(Duration.ofSeconds(10), Duration.ofMillis(200), d -> Thread.sleep(d),
-                            System::nanoTime));
+                    new StartupRetry(Duration.ofSeconds(10), Duration.ofMillis(200), d -> {
+                        waits.incrementAndGet();
+                        firstFailure.countDown();
+                        Thread.sleep(d);
+                    }, System::nanoTime));
             servers.add(sync::destroy);
 
             MockConfigStore store = new MockConfigStore(PROPERTIES, sync);
 
+            assertThat(waits.get()).isPositive();
             assertThat(store.snapshot().failureRate()).isEqualTo(PROPERTIES.failureRate());
             assertThat(redis.opsForHash().get(RedisConfigSync.CONFIG_KEY, "version")).isEqualTo("0");
         } finally {
