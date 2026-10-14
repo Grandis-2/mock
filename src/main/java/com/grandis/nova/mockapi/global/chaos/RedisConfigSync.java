@@ -112,6 +112,7 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
     private final RedisMessageListenerContainer listeners;
     private final JsonMapper json;
     private final Duration safetyInterval;
+    private final StartupRetry startupRetry;
     private final ScheduledExecutorService safetyCheck =
             Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("mock-config-sync").daemon().factory());
 
@@ -126,16 +127,26 @@ public class RedisConfigSync implements ConfigSync, DisposableBean {
     /** 시험이 안전망 주기를 줄여 쓴다. */
     RedisConfigSync(StringRedisTemplate redis, RedisMessageListenerContainer listeners, JsonMapper json,
                     Duration safetyInterval) {
+        this(redis, listeners, json, safetyInterval, StartupRetry.DEFAULT);
+    }
+
+    /** 시험이 기동 재시도 상한을 줄여 쓴다. */
+    RedisConfigSync(StringRedisTemplate redis, RedisMessageListenerContainer listeners, JsonMapper json,
+                    Duration safetyInterval, StartupRetry startupRetry) {
         this.redis = redis;
         this.listeners = listeners;
         this.json = json;
         this.safetyInterval = safetyInterval;
+        this.startupRetry = startupRetry;
     }
 
     @Override
     public MockConfigStore.Applied start(MockConfigStore.Applied defaults, Consumer<MockConfigStore.Applied> onChange) {
-        List<?> stored = redis.execute(SEED, List.of(CONFIG_KEY),
-                newChangeId(), write(defaults.snapshot()), defaults.appliedAt().toString());
+        // 기동 중 첫 Redis 명령이라 첫 연결도 여기서 맺는다. 막 뜬 JVM 은 첫 연결이 시간 초과를 넘기기 쉬워 다시 시도한다.
+        String changeId = newChangeId();
+        String body = write(defaults.snapshot());
+        List<?> stored = startupRetry.run("공유 설정 첫 읽기(Redis 첫 연결)", () -> redis.execute(SEED,
+                List.of(CONFIG_KEY), changeId, body, defaults.appliedAt().toString()));
         Known current = read(stored);
         remember(current);
 

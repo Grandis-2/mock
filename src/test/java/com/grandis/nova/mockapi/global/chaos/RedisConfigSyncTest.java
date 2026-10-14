@@ -1,6 +1,7 @@
 package com.grandis.nova.mockapi.global.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.grandis.nova.mockapi.global.config.MockProperties;
 import com.grandis.nova.mockapi.global.config.SharedState;
@@ -15,12 +16,17 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
@@ -287,6 +293,84 @@ class RedisConfigSyncTest {
 
         assertThat(a.snapshot().configVersion()).isEqualTo(2);
         assertThat(a.snapshot().failureRate()).isEqualTo(0.4);
+    }
+
+    /**
+     * 2026-10-15 운영 — 막 뜬 JVM 의 첫 연결이 명령 시간 초과(500ms)를 넘겨 두 대가 모두 기동 중에 죽었다. 기동할 때는 같은
+     * 프로세스 안에서 다시 시도한다. 여기서는 Redis 를 잠시 멈춰(응답 없음) 첫 시도가 시간 초과로 실패하게 한다.
+     */
+    @Test
+    @DisplayName("기동 중 Redis 가 잠시 응답하지 않아도 다시 시도해 뜬다 — 명령 시간 초과는 운영처럼 500ms 그대로")
+    void startRetriesWhileRedisIsSlow() throws Exception {
+        LettuceConnectionFactory slow = shortTimeoutFactory(REDIS.getHost(), REDIS.getMappedPort(6379));
+        StringRedisTemplate slowRedis = new StringRedisTemplate(slow);
+        slowRedis.afterPropertiesSet();
+        var docker = REDIS.getDockerClient();
+        docker.pauseContainerCmd(REDIS.getContainerId()).exec();
+        // 첫 시도가 실패한 뒤에 되살린다. 정해 둔 시간 뒤에 되살리면 첫 명령이 늦을 때 다시 시도 없이 붙어도 통과한다.
+        CountDownLatch firstFailure = new CountDownLatch(1);
+        AtomicInteger waits = new AtomicInteger();
+        CompletableFuture<Void> resume = CompletableFuture.runAsync(() -> {
+            try {
+                firstFailure.await(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                docker.unpauseContainerCmd(REDIS.getContainerId()).exec();
+            }
+        });
+        try {
+            RedisConfigSync sync = new RedisConfigSync(slowRedis, idleListeners(slow), JSON, SAFETY,
+                    new StartupRetry(Duration.ofSeconds(10), Duration.ofMillis(200), d -> {
+                        waits.incrementAndGet();
+                        firstFailure.countDown();
+                        Thread.sleep(d);
+                    }, System::nanoTime));
+            servers.add(sync::destroy);
+
+            MockConfigStore store = new MockConfigStore(PROPERTIES, sync);
+
+            assertThat(waits.get()).isPositive();
+            assertThat(store.snapshot().failureRate()).isEqualTo(PROPERTIES.failureRate());
+            assertThat(redis.opsForHash().get(RedisConfigSync.CONFIG_KEY, "version")).isEqualTo("0");
+        } finally {
+            resume.join();
+        }
+    }
+
+    @Test
+    @DisplayName("Redis 가 정말 없으면 상한을 넘긴 뒤 기동에 실패한다")
+    void startFailsAfterBudgetWhenRedisIsDown() {
+        LettuceConnectionFactory down = shortTimeoutFactory("127.0.0.1", 1);
+        StringRedisTemplate downRedis = new StringRedisTemplate(down);
+        downRedis.afterPropertiesSet();
+        Duration budget = Duration.ofSeconds(2);
+        RedisConfigSync sync = new RedisConfigSync(downRedis, idleListeners(down), JSON, SAFETY,
+                new StartupRetry(budget, Duration.ofMillis(200), d -> Thread.sleep(d), System::nanoTime));
+        servers.add(sync::destroy);
+        long started = System.nanoTime();
+
+        assertThatThrownBy(() -> new MockConfigStore(PROPERTIES, sync))
+                .isInstanceOf(RedisConnectionFailureException.class);
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isGreaterThanOrEqualTo(budget);
+    }
+
+    /** 운영과 같은 명령 시간 초과(500ms). 첫 연결의 핸드셰이크도 이 시간 안에 끝나야 한다. */
+    private LettuceConnectionFactory shortTimeoutFactory(String host, int port) {
+        LettuceConnectionFactory f = new LettuceConnectionFactory(new RedisStandaloneConfiguration(host, port),
+                LettuceClientConfiguration.builder().commandTimeout(Duration.ofMillis(500)).build());
+        f.afterPropertiesSet();
+        f.start();
+        servers.add(f::destroy);
+        return f;
+    }
+
+    /** 기동만 보는 시험이라 알림 컨테이너는 켜지 않는다(운영도 모든 빈을 만든 뒤에 켜진다). */
+    private static RedisMessageListenerContainer idleListeners(LettuceConnectionFactory f) {
+        RedisMessageListenerContainer listeners = new RedisMessageListenerContainer();
+        listeners.setConnectionFactory(f);
+        listeners.afterPropertiesSet();
+        return listeners;
     }
 
     /** Mock 서버 한 대. 같은 Redis 를 보되 알림 구독 · 안전망은 각자 갖는다. */
