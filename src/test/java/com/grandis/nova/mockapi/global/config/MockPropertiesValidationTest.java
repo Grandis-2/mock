@@ -89,11 +89,11 @@ class MockPropertiesValidationTest {
     }
 
     @Test
-    @DisplayName("기본값은 워커 5초 · 유지 7초다 — be 워커 설정과 계약(docs/api.md)")
+    @DisplayName("기본값은 워커 3초 · 유지 7초다 — be 워커 기본값(read-timeout 3s)과 계약(docs/api.md)")
     void defaultHoldOutlastsWorker() {
         runner.run(context -> {
             var properties = context.getBean(MockProperties.class);
-            assertThat(properties.workerReadTimeoutMs()).isEqualTo(5000);
+            assertThat(properties.workerReadTimeoutMs()).isEqualTo(3000);
             assertThat(properties.timeoutHoldMs()).isEqualTo(7000);
         });
     }

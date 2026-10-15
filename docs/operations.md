@@ -447,20 +447,20 @@ docker compose --profile redis up -d     # MySQL + Redis (Redis 는 이 프로�
 ```bash
 # 터미널마다 포트만 바꾼다 (8081 · 8082 · …)
 java -jar build/libs/nova-0.0.1-SNAPSHOT.jar --server.port=8081 --mock.shared-state=redis \
-  --spring.data.redis.timeout=500ms --spring.data.redis.connect-timeout=1s
+  --spring.data.redis.timeout=500ms --spring.data.redis.connect-timeout=700ms
 ```
 
 `application.yml` 에 `mock.shared-state: redis` 와 `spring.data.redis.host · port · timeout · connect-timeout` 을 적어 두면
 인자를 줄일 수 있다(예시 파일 주석).
 
-**Redis 시간 초과는 꼭 짧게 둔다(`spring.data.redis.timeout: 500ms` · `connect-timeout: 1s`) — 없으면 redis 모드는 뜨지
-않는다.** 둘 중 하나라도 없거나, 두 배가 `worker-read-timeout-ms` 의 절반을 넘으면(기본 5초면 1250ms 초과) 기동 로그에 어느 값인지
+**Redis 시간 초과는 꼭 짧게 둔다(`spring.data.redis.timeout: 500ms` · `connect-timeout: 700ms`) — 없으면 redis 모드는 뜨지
+않는다.** 둘 중 하나라도 없거나, 두 배가 `worker-read-timeout-ms` 의 절반을 넘으면(기본 3초면 750ms 초과) 기동 로그에 어느 값인지
 나오고 멈춘다
 (`RedisTimeoutGuard`). redis 모드는 등록마다
 결함을 Redis 에서 꺼내 본다(결함이 없어도 1~2번). Redis 가 멈추면 그 시간만큼 기다린 뒤에야 결함 없음으로 넘어가는데,
 정하지 않으면 Lettuce 기본 60초라 그동안 모든 등록이 멈추고 워커(읽기 5초)에는 Mock 전체가 먹통으로 보인다. 새 등록
 하나는 결함을 두 번 보므로 시간 초과도 두 번 쌓인다 — 500ms 면 멈춘 Redis 에서 **약 1.1초**(500ms × 2. `RedisFaultSharingTest`
-의 멈춤 시험이 2초 안을 확인한다), 연결부터 안 되면 약 2초(연결 1s × 2)가 더해진다. 둘 다 워커 읽기 5초 안이다. 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
+의 멈춤 시험이 2초 안을 확인한다), 연결부터 안 되면 약 1.4초(연결 700ms × 2)가 더해진다. 둘 다 워커 읽기 3초 안이다. 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
 5대가 1.3GB 로 떴다. **한 PC 에 여러 대는 동작 확인용이다.** CPU · 메모리를 나눠 쓰므로 처리량은 늘지 않는다.
 
 **확인** — 한 대에서 바꾸고 다른 서버를 본다.

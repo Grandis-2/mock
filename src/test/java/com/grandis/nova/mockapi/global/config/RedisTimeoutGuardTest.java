@@ -20,14 +20,15 @@ import org.springframework.context.annotation.Import;
  */
 class RedisTimeoutGuardTest {
 
-    private static final long WORKER_READ_TIMEOUT_MS = 5000;
+    /** 기본값 · 운영값(be 워커 기본 3s). */
+    private static final long WORKER_READ_TIMEOUT_MS = 3000;
 
     @Test
-    @DisplayName("권장값(명령 500ms · 연결 1s)이면 통과한다")
+    @DisplayName("권장값(명령 500ms · 연결 700ms)이면 통과한다")
     void recommendedPasses() {
         assertThatCode(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(500), WORKER_READ_TIMEOUT_MS))
                 .doesNotThrowAnyException();
-        assertThatCode(() -> RedisTimeoutGuard.check("t", Duration.ofSeconds(1), WORKER_READ_TIMEOUT_MS))
+        assertThatCode(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(700), WORKER_READ_TIMEOUT_MS))
                 .doesNotThrowAnyException();
     }
 
@@ -41,18 +42,18 @@ class RedisTimeoutGuardTest {
     }
 
     /**
-     * 두 번 기다린 시간이 워커 읽기 타임아웃의 절반을 넘으면 거절한다. 나머지 절반은 지연 · 처리 몫이다 — 2499ms 면 두 번에
-     * 4998ms 라 최소 지연 300ms 만 더해도 5초를 넘는다(리뷰 지적).
+     * 두 번 기다린 시간이 워커 읽기 타임아웃의 절반을 넘으면 거절한다. 나머지 절반은 지연 · 처리 몫이다 — 1499ms 면 두 번에
+     * 2998ms 라 최소 지연 300ms 만 더해도 3초를 넘는다(리뷰 지적).
      */
     @Test
-    @DisplayName("두 번 기다린 시간이 워커 읽기 타임아웃의 절반을 넘으면 뜨지 않는다 — 5초면 1250ms 까지, 1251ms 부터 거절")
+    @DisplayName("두 번 기다린 시간이 워커 읽기 타임아웃의 절반을 넘으면 뜨지 않는다 — 3초면 750ms 까지, 751ms 부터 거절")
     void tooLongFails() {
-        assertThatCode(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(1250), WORKER_READ_TIMEOUT_MS))
+        assertThatCode(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(750), WORKER_READ_TIMEOUT_MS))
                 .doesNotThrowAnyException();
-        assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(1251), WORKER_READ_TIMEOUT_MS))
+        assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(751), WORKER_READ_TIMEOUT_MS))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("절반");
-        assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(2499), WORKER_READ_TIMEOUT_MS))
+        assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofMillis(1499), WORKER_READ_TIMEOUT_MS))
                 .isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> RedisTimeoutGuard.check("t", Duration.ofSeconds(60), WORKER_READ_TIMEOUT_MS))
                 .isInstanceOf(IllegalStateException.class);
@@ -83,7 +84,7 @@ class RedisTimeoutGuardTest {
                 .run(context -> assertThat(context).hasFailed()
                         .getFailure().rootCause().hasMessageContaining("spring.data.redis.timeout"));
         runner.withPropertyValues("mock.shared-state=redis",
-                        "spring.data.redis.timeout=500ms", "spring.data.redis.connect-timeout=1s")
+                        "spring.data.redis.timeout=500ms", "spring.data.redis.connect-timeout=700ms")
                 .run(context -> assertThat(context).hasNotFailed().hasSingleBean(RedisTimeoutGuard.class));
         runner.withPropertyValues("mock.shared-state=memory")
                 .run(context -> assertThat(context).hasNotFailed().doesNotHaveBean(RedisTimeoutGuard.class));
@@ -101,7 +102,7 @@ class RedisTimeoutGuardTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("spring.data.redis.connect-timeout");
 
-        redis.setConnectTimeout(Duration.ofSeconds(1));
+        redis.setConnectTimeout(Duration.ofMillis(700));
         assertThatCode(() -> new RedisTimeoutGuard(redis, mock)).doesNotThrowAnyException();
     }
 }
