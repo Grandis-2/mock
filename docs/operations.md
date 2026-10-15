@@ -213,9 +213,9 @@ curl -i localhost:8081/external/reservations/by-key/demo-lost-1
 키 하나로 보여 준다. 기다리는 동안은 잠금 전이라 다른 요청이 끼어들 수 있다(api.md 결함 절).
 
 - **결함은 아직 등록하지 않은 키에 건다.** 이미 등록 · 취소된 키에 걸어도 기다리긴 하지만 늦은 커밋은 생기지 않는다
-- **대기는 15초로 건다.** 원래 요청은 지연(약 0.5초) + 15초 뒤에 깨어난다. 워커가 5초에 포기한 뒤 재시도 · 취소를
-  **손으로 쳐도 10초 가까이 여유**가 있다. 6초처럼 짧게 걸면 여유가 1초 남짓이라, 손으로 치는 사이에 원래 요청이
-  먼저 커밋해 결과가 뒤집힌다(① 재시도가 재생을 받고, ② 는 등록이 생긴 뒤에 취소된다)
+- **대기는 15초로 건다.** 원래 요청은 지연(약 0.5초) + 15초 뒤에 깨어난다. 워커가 3초에 포기한 뒤 재시도 · 취소를
+  **손으로 쳐도 12초 넘게 여유**가 있다(확인한 10-06 은 워커 5초라 10초 남짓). 6초처럼 짧게 걸면 여유가 3초 남짓이라,
+  손으로 치는 사이에 원래 요청이 먼저 커밋해 결과가 뒤집히기 쉽다(① 재시도가 재생을 받고, ② 는 등록이 생긴 뒤에 취소된다)
 
 **① 기다리는 동안 같은 키로 재시도 → 행 하나**
 
@@ -226,7 +226,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' \
   -d '{"externalKey":"demo-slow-1","faultType":"SLOW_SUCCESS","delayMs":15000}'
 
-# 워커처럼 5초에 포기한다
+# 워커처럼 포기한다 — 확인 당시 워커 5초. 지금 워커와 같게 하려면 --max-time 3
 curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-1' -H 'Content-Type: application/json' \
   -d '{"ourReservationId":"demo-slow-1","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
