@@ -3,7 +3,9 @@
 -- customer_id · product_id 만 be 의 id UUID 전환(NV-326)을 따라 BINARY(16) 이다(ERD 는 BIGINT).
 -- 등록 요청 본문은 본 서비스(preorder) 형식이고, 이 표에는 ERD 칸으로 바꿔 넣는다(docs/api.md 「내용 비교」).
 -- 럭키드로우 표 둘(draws · draw_entries, NV-505)은 Mock 이 먼저 정했다 — ERD 에는 머지 뒤 반영을 부탁한다.
--- 이 파일이 스키마의 정본이다. Hibernate 가 테이블을 만들지 않게 ddl-auto 는 validate 로 둔다.
+-- 운영 DB 의 표는 db/migrations(Flyway)가 정한다 — 정본은 그쪽이다. 이 파일은 같은 표의 마지막 모습을 한 파일로 둔 것이고
+-- 로컬 compose 와 MySQL 시험(Testcontainers)이 쓴다. 둘을 맞춰 보는 검사는 없으니 표를 바꾸면 새 마이그레이션과 이 파일을 함께 고친다.
+-- Hibernate 가 테이블을 만들지 않게 ddl-auto 는 validate 로 둔다.
 -- 표마다 CREATE TABLE IF NOT EXISTS 라 이미 있는 DB 에 다시 돌려도 없는 표만 생긴다.
 
 CREATE DATABASE IF NOT EXISTS external_mock

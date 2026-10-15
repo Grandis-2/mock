@@ -73,5 +73,6 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | [docs/design.md](docs/design.md) | 처리 순서 · 동시성 · 등록 ↔ 제어 파트 계약 · 시험 방법 |
 | [docs/operations.md](docs/operations.md) | 운영 · 시연 — Mock 조절 · 장애 재현 · 부하 실행 · 결과 확인 |
 | [docs/load-test.md](docs/load-test.md) | 부하 시험 — 판정 기준과 결과 |
-| [docs/schema.sql](docs/schema.sql) | 스키마 정본 |
+| [db/migrations](db/migrations) | **스키마 정본** — 운영 DB 의 표(Flyway, 배포 때 적용) |
+| [docs/schema.sql](docs/schema.sql) | 같은 표를 한 파일로 — 로컬 compose · MySQL 시험용. 표를 바꾸면 마이그레이션과 함께 고친다 |
 | [docs/deploy.md](docs/deploy.md) | 빌드 · 배포 — 워크플로 · 이미지 · 스키마 변경 · 인프라 준비물 |

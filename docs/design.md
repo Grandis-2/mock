@@ -1,6 +1,6 @@
 # Mock 설계 · 시험
 
-API 계약은 [api.md](api.md), 스키마는 [schema.sql](schema.sql) 이 정본이다. 이 문서는 그 계약을
+API 계약은 [api.md](api.md), 스키마는 [db/migrations](../db/migrations) 가 정본이다(로컬 · 시험용 한 파일은 [schema.sql](schema.sql)). 이 문서는 그 계약을
 **왜 이렇게 구현했는지**와 **어떻게 시험하는지**를 적는다.
 
 ## 실행 전제
@@ -49,7 +49,7 @@ com.grandis.nova.mockapi/
 ```
 
 **패키지는 같이 바뀌는 것끼리 묶는다.** `api` 는 [api.md](api.md) 가 바뀔 때, `application` 은 아래 처리
-순서가 바뀔 때, `domain` 은 [schema.sql](schema.sql) 이 바뀔 때 고치는 곳이다. 의존은 `api → application →
+순서가 바뀔 때, `domain` 은 표가 바뀔 때(마이그레이션 · [schema.sql](schema.sql)) 고치는 곳이다. 의존은 `api → application →
 domain` 방향으로만 흐르고 거꾸로 가리키지 않는다. 위층은 아래층 어디든 쓸 수 있어 응답 DTO 는 엔티티
 (`Registration`)를 직접 읽는다. 거꾸로는 안 되므로 처리 층은 요청 DTO 대신 `RegisterCommand` 를 받는다.
 `control` 에는 자기 테이블이 없어 `domain` 이 없다 — 설정 · 결함 보관소는 등록 파트와의 계약이라
@@ -217,11 +217,13 @@ READ COMMITTED 가 빠지면 없는 행을 잠그는 읽기가 갭 락을 걸어
 
 ## 스키마
 
-`docs/schema.sql` 이 정본이다. Hibernate 가 테이블을 만들면 CHECK 제약이 빠지므로 `ddl-auto` 는
-`validate` 로 둔다. 칸을 바꿀 때는 엔티티와 이 파일을 함께 고치고 ERD 담당에게 알린다.
+**운영 DB 의 표는 `db/migrations`(Flyway)가 정한다** — release 가 배포 전에 적용한다([deploy.md](deploy.md) 「스키마 변경」).
+`docs/schema.sql` 은 같은 표의 마지막 모습을 한 파일로 둔 것이고 로컬 compose 와 MySQL 시험이 쓴다. Hibernate 가 테이블을
+만들면 CHECK 제약이 빠지므로 `ddl-auto` 는 `validate` 로 둔다. 칸을 바꿀 때는 엔티티 · **새 마이그레이션** · `schema.sql` 을
+함께 고치고 ERD 담당에게 알린다 — 마이그레이션과 `schema.sql` 을 맞춰 보는 검사는 없어 사람이 맞춘다.
 
 표는 셋이다 — 등록 원장 `preorder_registrations`, 럭키드로우 `draws` · `draw_entries`. 럭키드로우 표는 Mock 이 먼저 정했고
-ERD 에는 머지 뒤 반영을 부탁한다. 표마다 `CREATE TABLE IF NOT EXISTS` 라 **이미 쓰던 DB 에 이 파일을 다시 돌려도 없는 표만
+ERD 에는 머지 뒤 반영을 부탁한다. 표마다 `CREATE TABLE IF NOT EXISTS` 라 **이미 쓰던 로컬 DB 에 이 파일을 다시 돌려도 없는 표만
 생긴다** — compose 는 빈 볼륨일 때만 이 파일을 돌리므로, 표가 늘면 기존 DB 에는 손으로 한 번 돌린다([operations.md](operations.md) 0장).
 
 시각 칸은 `Instant` 다. 시간대 없는 `LocalDateTime` 을 쓰면 Hibernate 의 `jdbc.time_zone` 과 PC
@@ -238,7 +240,7 @@ ERD 에는 머지 뒤 반영을 부탁한다. 표마다 `CREATE TABLE IF NOT EXI
 **H2 는 컨텍스트 로딩과 순서대로 부를 때의 판정용이다.** 멱등 등록과 키 조회는 잠금 · 중복 키 동작에
 기대므로 H2 에서 통과해도 MySQL 에서 통과한다는 보장이 없다. 그런 시험은 `RegistrationConcurrencyTest` ·
 `DrawConcurrencyTest`(럭키드로우 응모 · 추첨) 처럼 Testcontainers 로 진짜 MySQL 8.4 를 띄워 돌린다. 스키마는
-`docs/schema.sql` 을 그대로 넣는다.
+`docs/schema.sql` 을 그대로 넣는다 — 운영의 마이그레이션과 정의가 같아야 이 시험이 운영 표를 시험한 것이 된다.
 
 **Docker 가 없으면 MySQL 시험만 조용히 건너뛴다.** 로컬 빌드는 초록색이라 놓치기 쉽다. 동시성을 건드렸으면
 Docker 를 켜고, 결과에서 건너뜀이 0 인지 본다.

@@ -36,7 +36,7 @@ spring:
 
   jpa:
     hibernate:
-      # 스키마는 docs/schema.sql 이 정본이다. Hibernate 가 만들면 CHECK 제약이 빠진다.
+      # 표는 db/migrations(운영 · 정본) · docs/schema.sql(로컬)이 만든다. Hibernate 가 만들면 CHECK 제약이 빠진다.
       ddl-auto: validate
     properties:
       hibernate:

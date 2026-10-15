@@ -18,7 +18,8 @@ import org.springframework.data.domain.Persistable;
 /**
  * 럭키드로우 회차. 회차 id 하나에 행 하나다.
  *
- * <p>스키마는 {@code docs/schema.sql} 이 정본이다. 칸을 바꾸면 그쪽도 함께 고친다.
+ * <p>스키마는 {@code db/migrations} 가 정본이다(로컬 · 시험은 {@code docs/schema.sql}). 칸을 바꾸면 새 마이그레이션을 더하고
+ * schema.sql 도 함께 고친다.
  *
  * <p>Mock 은 회차를 미리 모른다 — 처음 보는 회차 id 로 응모가 오면 이 행을 만든다. 응모와 추첨은 이 행을 잠가 줄을
  * 세운다. 추첨 중에 응모가 끼어들면 센 수와 뽑은 대상이 달라진다.
