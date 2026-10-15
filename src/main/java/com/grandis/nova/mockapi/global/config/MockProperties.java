@@ -73,8 +73,10 @@ public record MockProperties(
          *
          * <p>Mock 은 이 값을 쓰지 않고, 유지 시간이 이보다 충분히 긴지 기동할 때 확인하는 데만 쓴다.
          * 따로 적어 두지 않으면 워커 타임아웃이 바뀌었을 때 유지 시간이 조용히 어긋난다.
+         *
+         * <p>기본값은 be 워커의 기본값(3s, {@code nova.worker.mock.read-timeout})과 같다. 운영도 이 값이다.
          */
-        @Min(1) @DefaultValue("5000") long workerReadTimeoutMs,
+        @Min(1) @DefaultValue("3000") long workerReadTimeoutMs,
 
         /**
          * 설정 · 결함을 둘 곳. 한 대면 {@code MEMORY}(기본), 여러 대면 {@code REDIS}.

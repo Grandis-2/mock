@@ -20,7 +20,8 @@ import org.springframework.data.domain.Persistable;
 /**
  * 외부 예약 Mock 의 등록 원장. 키 하나에 행 하나다.
  *
- * <p>스키마는 {@code docs/schema.sql} 이 정본이다. 칸을 바꾸면 그쪽도 함께 고친다.
+ * <p>스키마는 {@code db/migrations} 가 정본이다(로컬 · 시험은 {@code docs/schema.sql}). 칸을 바꾸면 새 마이그레이션을 더하고
+ * schema.sql 도 함께 고친다.
  * 번호 유니크 제약은 정본에도 있고, 여기 적어두는 이유는 H2 시험에도 같은 제약이 생기게 하려는 것이다.
  *
  * <p>시각 칸은 {@link Instant} 다. 시간대 없는 LocalDateTime 을 쓰면 Hibernate 의 {@code jdbc.time_zone}

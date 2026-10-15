@@ -45,7 +45,8 @@ OpenTelemetry Java 에이전트(`/otel/javaagent.jar`)는 싣기만 한다. 켜�
 ## 스키마 변경
 
 `db/migrations` 에 `V<yyyyMMddHHmm>__<소문자_설명>.sql` 을 더한다. 운영 DB 의 표는 이 마이그레이션이 정한다 —
-`docs/schema.sql` 은 로컬 compose 용이고 마이그레이션과 맞춰 보지 않는다.
+`docs/schema.sql` 은 같은 표를 한 파일로 둔 것으로 로컬 compose 와 MySQL 시험(Testcontainers)이 쓴다.
+마이그레이션과 맞춰 보는 검사는 없으니 표를 바꾸면 둘 다 고친다.
 
 ```bash
 bash db/verify.sh
