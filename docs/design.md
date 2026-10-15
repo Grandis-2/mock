@@ -7,7 +7,8 @@ API 계약은 [api.md](api.md), 스키마는 [db/migrations](../db/migrations) �
 
 **기본은 1개로 띄운다(`mock.shared-state=memory`).** 지연·실패 설정과 결함이 메모리에 있어 2개 이상이면 설정 변경이
 받은 서버에만 적용되고, 결함을 건 키의 요청이 다른 서버로 가면 발동하지 않는다. 등록 기록은 DB 라 영향이 없다.
-**여러 대로 띄울 때는 `redis`** 로 설정 · 결함을 Redis 에 둔다(아래 「설정 · 결함 공유」).
+**여러 대로 띄울 때는 `redis`** 로 설정 · 결함을 Redis 에 둔다(아래 「설정 · 결함 공유」). **운영은 여러 대 · redis 모드다**
+(대수는 인프라 `mock/service.yml`, [deploy.md](deploy.md)).
 
 저장소는 MySQL `external_mock` database 다. 본 서비스와 **같은 인스턴스의 다른 database** 이며
 cross-database 조회나 물리 FK 를 두지 않는다. 재기동해도 등록 기록 · 럭키드로우 응모가 유지된다(5.4 기록 보존).

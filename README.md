@@ -1,9 +1,9 @@
 # mock
 
-외부 예약 시스템(통신사 예약 서버)을 대신하는 Mock 서버. 사전예약 시스템([be](https://github.com/Grandis-Nova/be))의
+외부 예약 시스템(통신사 예약 서버)을 대신하는 Mock 서버. 사전예약 시스템([be](https://github.com/Grandis-2/be))의
 워커가 HTTP 로 부른다. 평균 500ms 지연과 5% 실패를 재현하고, 시연 중 재기동 없이 바꿀 수 있다.
 
-프로젝트 전체 소개 · 업무 정책 · 브랜치 · 커밋 규칙은 [be README](https://github.com/Grandis-Nova/be#readme) 를 따른다.
+프로젝트 전체 소개 · 업무 정책 · 브랜치 · 커밋 규칙은 [be README](https://github.com/Grandis-2/be#readme) 를 따른다.
 
 ## 실행
 
@@ -50,7 +50,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 | GET | `/external/draws/{drawId}` | 럭키드로우 회차 조회 (받은 응모 수 · 추첨 결과) |
 | POST | `/external/draws/{drawId}/draw` | 럭키드로우 추첨 (멱등 — 회차 id) |
 | GET · PUT | `/external/config` | 지연·실패 설정 조회 · 변경 |
-| POST | `/external/faults` | 결함 주입 (응답 유실) |
+| POST | `/external/faults` | 결함 주입 (응답 유실 · 느린 성공) |
 | POST | `/external/reset` | 기록 초기화 |
 
 ## 꼭 알아야 할 계약
@@ -62,7 +62,8 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 - 요청 본문에 계약에 없는 필드가 있으면 400 이다
 - 지연 · 실패는 등록과 럭키드로우 응모 · 추첨에만 주입한다. 조회 · 취소 · 설정에는 없어서 실패율 100% 에서도 되돌릴 수 있다
 - 기본은 **1개**로 띄운다(설정 · 결함이 메모리). **여러 대면 `mock.shared-state=redis`** — 설정 · 결함을 Redis 로 나눠
-  한 대에서 바꿔도 모두 바뀐다([operations.md](docs/operations.md) 2-6)
+  한 대에서 바꿔도 모두 바뀐다([operations.md](docs/operations.md) 2-6). **운영은 여러 대 · redis 모드다**(대수는 인프라
+  `mock/service.yml`, 배포는 [deploy.md](docs/deploy.md))
 - 정합성 검사는 `external_mock` 스키마를 직접 조회하지 않고 원장 목록 조회 API 로 읽는다
 
 ## 문서
