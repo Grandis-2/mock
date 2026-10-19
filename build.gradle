@@ -71,7 +71,7 @@ tasks.named('test') {
 //   JDBC      생략하면 localhost:3307. **다른 장비에서 쏠 때는 반드시 Mock 장비 주소로 넣는다**
 //             안 넣으면 원장이 비어 보여 키 대조가 전부 실패로 찍힌다
 //
-// 장비를 나눠 돌릴 때 (docs/load-test.md 합의 조건 1번):
+// 장비를 나눠 돌릴 때 (docs/operations.md 3-3 합의 조건 「환경」):
 //   Mock 장비   ./gradlew bootRun
 //   부하 장비   ./gradlew loadTest --args="http://MOCK_IP:8081 baseline classify 5000 \
 //                                          jdbc:mysql://MOCK_IP:3307/external_mock?serverTimezone=UTC"
@@ -83,7 +83,7 @@ tasks.named('test') {
 //   스크립트는 `판정: …` 줄로 가른다. 예열은 늘 0 으로 끝난다.
 //   조합: baseline·classify · baseline·latency · latency·classify · latency·latency · timeout·classify
 //         tail·classify · tail·latency · tail-over-timeout·classify (꼬리 조합은 15회 판정과 따로 센다)
-//   자세한 이유는 docs/load-test.md, 순서대로 돌리는 방법은 docs/operations.md 3장.
+//   판정 규칙과 이유는 docs/operations.md 3-3, 순서대로 돌리는 방법은 같은 문서 3-2.
 tasks.register('loadTest', JavaExec) {
     group = 'verification'
     description = '부하 시험을 돌린다. Mock 이 이미 떠 있어야 한다'

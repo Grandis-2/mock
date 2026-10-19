@@ -509,7 +509,7 @@ public final class LoadReport {
         out.append("| CPU 코어 | ").append(Runtime.getRuntime().availableProcessors()).append(" |\n");
         out.append("| 대상 | ").append(plan.baseUrl()).append(" |\n");
         // 판정 숫자를 가장 크게 흔든 조건이다 — 커밋마다 디스크 동기화(1 · 1)면 Docker Desktop 에서 COMMIT 이 p99 200ms 까지
-        // 걸려 풀이 막혔다. 다른 설정으로 돌린 숫자를 같은 조건으로 읽지 않게 적는다(docs/load-test.md).
+        // 걸려 풀이 막혔다. 다른 설정으로 돌린 숫자를 같은 조건으로 읽지 않게 적는다(docs/operations.md 3-1).
         out.append("| MySQL 커밋 동기화 | ")
                 .append(db == null ? "원장을 읽지 못해 모름" : db.commitDurability())
                 .append(" |\n\n");
