@@ -3,7 +3,7 @@
 | 문서 정보 | 내용 |
 | --- | --- |
 | 대상 | 외부 예약 시스템 Mock · 기능 F-S-05 · F-A-03 |
-| 버전 / 작성일 | 5.17 / 2026-10-14 (럭키드로우 응모 · 회차 조회 · 추첨 3개 — NV-505. 5.16: 여러 대 실행 — 설정 · 결함을 Redis 로 공유 `mock.shared-state`) |
+| 버전 / 작성일 | 5.18 / 2026-10-15 (워커 읽기 타임아웃 기본 5000 → 3000ms — be 워커 기본값 · 운영값과 맞춤, NV-565. 5.17: 럭키드로우 응모 · 회차 조회 · 추첨 3개 — NV-505) |
 | 서버 | `http://localhost:8081` |
 | 개수 | 12개 |
 | 기준 | 원장 · 응답은 ERD v14.1 (2026-10-06) 의 `external_mock` 영역 — 칸 · 제약은 v5(2026-09-17)와 같고, `customer_id` · `product_id` 만 be 의 id UUID 전환(NV-326)을 따라 `BINARY(16)` 이다(ERD 는 `BIGINT`). 요청 본문은 본 서비스(preorder)의 `RegisterRequestPayload` · `CancelRequestPayload` (be 결정, 2026-10-06) |
@@ -84,7 +84,7 @@ Mock 은 남의 회사 시스템을 연기한다. 우리 오류 포맷을 따르
 
 응답만으로 등록이 됐는지 알 수 없는 경우다. 타임아웃과 `errorCode` 가 없는 응답이 여기에 든다.
 
-Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RESPONSE_LOST_AFTER_COMMIT` — 는 유지 시간(기본 7초) 동안 아무것도 보내지 않다가 본문 없는 500 으로 끝난다. 유지 시간을 워커 읽기 타임아웃(5초)보다 2초 길게 두므로 워커에는 타임아웃으로 보인다. 본문 없는 500 을 받았더라도 같게 처리한다.
+Mock 이 응답하지 않는 두 경우 — `failureMode=TIMEOUT` 과 결함 `RESPONSE_LOST_AFTER_COMMIT` — 는 유지 시간(기본 7초) 동안 아무것도 보내지 않다가 본문 없는 500 으로 끝난다. 유지 시간을 워커 읽기 타임아웃(기본 3초 · 운영도 3초)보다 2초 이상 길게 두므로 워커에는 타임아웃으로 보인다. 본문 없는 500 을 받았더라도 같게 처리한다.
 
 `errorCode` 없는 응답을 워커가 직접 받아 보려면 `failureMode=MIXED` 를 쓴다(설정 변경 절). 실패에 걸린 요청에 본문 없는 500 · 앞단 장비 흉내의 HTML 502 · 503 · 504 를 바로 보낸다. 모두 커밋 전이라 키 조회는 404 다.
 
@@ -1070,7 +1070,7 @@ Accept: application/json
   "configVersion": 4,
   "appliedAt": "2026-09-16T09:40:00.000Z",
   "timeoutHoldMs": 7000,
-  "workerReadTimeoutMs": 5000
+  "workerReadTimeoutMs": 3000
 }
 ```
 
@@ -1206,9 +1206,9 @@ Accept: application/json
 }
 ```
 
-유지 시간은 Mock 설정 `mock.timeout-hold-ms` 이고 **기본값 7000ms** 다. 본 서비스 워커의 HTTP 읽기 타임아웃 **5초**(be `worker` 의 `external.mock.read-timeout`)에 2초를 더한 값이다. 워커 타임아웃을 바꾸면 이 값도 함께 바꾼다.
+유지 시간은 Mock 설정 `mock.timeout-hold-ms` 이고 **기본값 7000ms** 다. 본 서비스 워커의 HTTP 읽기 타임아웃(be `worker` 의 `nova.worker.mock.read-timeout`, **기본 3초 · 운영도 3초**)보다 2초 이상 길어야 한다. 7000 은 워커가 5초이던 때(2026-10-12 전) 5초 + 2초로 정한 값이고, 3초인 지금도 규칙을 넘어 그대로 둔다(운영도 7000). 워커 타임아웃을 바꾸면 이 값도 함께 본다.
 
-워커 타임아웃은 Mock 설정 `mock.worker-read-timeout-ms`(기본 5000ms)로 옮겨 적는다. Mock 은 이 값을 쓰지 않고, **유지 시간이 `worker-read-timeout-ms + 2000` 보다 짧으면 기동하지 않는다**(0 은 붙잡지 않는 시험 전용이라 예외). 워커 타임아웃이 바뀌었는데 유지 시간만 그대로 두는 실수가 기동 단계에서 드러난다.
+워커 타임아웃은 Mock 설정 `mock.worker-read-timeout-ms`(기본 3000ms)로 옮겨 적는다. Mock 은 이 값을 쓰지 않고, **유지 시간이 `worker-read-timeout-ms + 2000` 보다 짧으면 기동하지 않는다**(0 은 붙잡지 않는 시험 전용이라 예외). 워커 타임아웃이 바뀌었는데 유지 시간만 그대로 두는 실수가 기동 단계에서 드러난다.
 
 | 유지 시간 | 결과 |
 | --- | --- |

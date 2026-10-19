@@ -18,7 +18,7 @@ import org.springframework.data.domain.Persistable;
 /**
  * 럭키드로우 응모. 응모 id 하나에 행 하나다. 한 건씩 쌓이고, 추첨하면 당첨된 행에 뽑힌 순서가 적힌다.
  *
- * <p>스키마는 {@code docs/schema.sql} 이 정본이다. 회차당 회원 하나 제약은 정본에도 있고, 여기 적어두는 이유는 H2 시험에도
+ * <p>스키마는 {@code db/migrations} 가 정본이다(로컬 · 시험은 {@code docs/schema.sql}). 회차당 회원 하나 제약은 정본에도 있고, 여기 적어두는 이유는 H2 시험에도
  * 같은 제약이 생기게 하려는 것이다.
  *
  * <p>회차({@link Draw})를 객체로 잇지 않고 id 칸으로만 둔다. 응모는 늘 회차 행을 먼저 잠근 뒤에 다루므로 객체로 이어 둘

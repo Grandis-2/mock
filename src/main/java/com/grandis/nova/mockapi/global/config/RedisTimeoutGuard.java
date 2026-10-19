@@ -16,8 +16,8 @@ import org.springframework.stereotype.Component;
  * 넣는다). 빠져도 오류 없이 기본값으로 돌아서 {@link VirtualThreadGuard} 와 같은 이유로 기동할 때 확인한다.
  *
  * <p>상한은 워커 읽기 타임아웃({@link MockProperties#workerReadTimeoutMs()})에서 나온다 — 두 번 다 시간 초과돼도 그 <b>절반</b>
- * 안이어야 한다(나머지 절반은 지연 · 처리 몫, {@link #WORKER_TIMEOUT_SHARE_DIVISOR}). 권장값(명령 500ms · 연결 1s)이면 기본 워커
- * 5초에서 1초 · 2초로 2.5초 안이다.
+ * 안이어야 한다(나머지 절반은 지연 · 처리 몫, {@link #WORKER_TIMEOUT_SHARE_DIVISOR}). 즉 각 값이 워커 타임아웃의 1/4 이하다.
+ * 권장값(명령 500ms · 연결 700ms)이면 기본 워커 3초에서 1초 · 1.4초로 1.5초 안이다.
  */
 @Component
 @ConditionalOnProperty(prefix = "mock", name = "shared-state", havingValue = "redis")
@@ -45,7 +45,7 @@ class RedisTimeoutGuard {
         if (value == null || value.isZero() || value.isNegative()
                 || value.multipliedBy(LOOKUPS_PER_REGISTRATION * WORKER_TIMEOUT_SHARE_DIVISOR)
                         .compareTo(Duration.ofMillis(workerReadTimeoutMs)) > 0) {
-            throw new IllegalStateException(("mock.shared-state=redis 면 %s 를 정해야 합니다(권장: timeout 500ms · connect-timeout 1s,"
+            throw new IllegalStateException(("mock.shared-state=redis 면 %s 를 정해야 합니다(권장: timeout 500ms · connect-timeout 700ms,"
                     + " application.yml.example 참고). 등록 하나가 결함을 Redis 에서 두 번 보므로 그 두 배가 워커 읽기 타임아웃"
                     + "(%dms)의 절반 이하여야 합니다 — 나머지 절반은 지연 · 처리 몫. 빠지면 Lettuce 기본(60초 · 10초)이라 Redis 가"
                     + " 멈출 때 등록이 그만큼 묶입니다. 받은 값: %s").formatted(name, workerReadTimeoutMs, value));

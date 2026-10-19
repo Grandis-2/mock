@@ -34,7 +34,7 @@ cp src/main/resources/application.yml.example src/main/resources/application.yml
 | `failure-rate` | 0 ~ 1 | **5% 를 `5` 로 적기** — `0.05` 가 맞다. 막지 않으면 등록이 전부 실패한 채로 뜬다 |
 | `latency-jitter` | 0 ~ 1 | 1 을 넘기면 하한만 0 에서 잘려 평균이 조용히 올라간다 |
 | `timeout-hold-ms` | 0, 또는 **`worker-read-timeout-ms` + 2000 이상** | 워커 타임아웃과 같게 두기 — 워커가 타임아웃 대신 빈 500 을 받는다. 0 은 붙잡지 않고 바로 빈 500 을 보내는 시험 전용 값이라 운영 · 시연에서 쓰지 않는다 |
-| `worker-read-timeout-ms` | 1 이상 | be 워커의 읽기 타임아웃(5초)을 옮겨 적는 값이다. 워커 값이 바뀌면 `timeout-hold-ms` 와 함께 옮긴다 |
+| `worker-read-timeout-ms` | 1 이상 | be 워커의 읽기 타임아웃(기본 3초 · 운영도 3초)을 옮겨 적는 값이다. 기본 3000 워커 값이 바뀌면 `timeout-hold-ms` 와 함께 옮긴다 |
 | `spring.threads.virtual.enabled` | `true` | 줄이 빠지면 플랫폼 스레드로 돌아 대기하는 요청이 스레드를 다 차지한다. 그래서 꺼져 있으면 뜨지 않는다 |
 
 > **예전에 복사한 `application.yml` 은 `timeout-hold-ms: 5000` 이라 이제 뜨지 않는다.** 7000 으로 고치거나
@@ -114,9 +114,9 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 **취소 경합**은 지연 동안 취소를 끼워 넣는 시험이라 창이 넉넉해야 한다. 가장 짧게 뽑혀도 6초라
 손으로 취소를 보내기에 충분하다.
 
-**지연 감도**의 최대 2.8초는 워커 타임아웃(5초) 안이다. 지연을 평균 3,500ms 이상으로 올리면 최대
-4.9초에 처리 시간이 붙어 일부 요청이 워커에게는 결과 불명으로 보일 수 있다 — Mock 이 느린 게 아니라
-설정이 타임아웃에 걸친 것이다.
+**지연 감도**의 최대 2.8초는 워커 타임아웃(3초)에 바짝 붙어 있다. 처리 시간이 붙으면 드물게 일부 요청이 워커에게는
+결과 불명으로 보일 수 있다 — Mock 이 느린 게 아니라 설정이 타임아웃에 걸친 것이다. 워커가 5초이던 때 정한 프리셋이라,
+결과 불명 없이 지연만 보려면 평균 1,500ms(최대 2.1초)로 낮춘다.
 
 결함 주입을 확인할 때 **실패율을 0 으로 내리는 이유** — 지연·실패 판정이 결함 발동보다 앞서므로,
 기본 5% 로 두면 재시도가 결함에 닿기 전에 일시 실패로 끝날 수 있다.
@@ -138,8 +138,12 @@ DB 는 서로 다르다** — 없음 · 있음 · 나중에 생김. 이 대조�
 | 같은 키 재요청 | 새 등록 (`Replay: false`) | 재생 (`Replay: true`) | **먼저 커밋** (`Replay: false`) — 늦게 깬 원래 요청이 재생 쪽 |
 
 `TIMEOUT` · 응답 유실은 `mock.timeout-hold-ms`(기본 7000ms) 동안 헤더도 보내지 않고 붙잡았다가 **본문 없는 500 으로
-끝낸다.** 워커(읽기 타임아웃 5초)가 먼저 포기해야 결과 불명이 된다. 느린 성공은 붙잡는 것이 아니라 `delayMs` 만큼
+끝낸다.** 워커(읽기 타임아웃 3초)가 먼저 포기해야 결과 불명이 된다. 느린 성공은 붙잡는 것이 아니라 `delayMs` 만큼
 기다린 뒤 **정상 처리**한다 — 워커가 포기한 뒤라 그 응답은 아무도 받지 않는다.
+
+> **아래 확인 기록(2026-10-01 · 10-06)은 워커가 5초이던 때다.** 그래서 `--max-time 5` 로 워커를 흉내 냈다. 지금 워커는
+> **3초**(be 2026-10-12 부터)라 `--max-time 3` 이 워커와 같다. 유지 시간(7초) · 느린 성공 대기(15초)가 둘 다보다 길어
+> 결과는 같다.
 
 > 유지 시간이 워커 읽기 타임아웃 + 2초보다 **짧으면** 워커가 타임아웃 대신 빈 500 을 받아 "일시 실패" 로
 > 처리한다. 재현하려던 상황이 아니다. 그래서 그렇게 설정하면 Mock 이 뜨지 않는다(0장).
@@ -160,7 +164,7 @@ curl --max-time 5 -X POST localhost:8081/external/reservations \
 curl -i localhost:8081/external/reservations/by-key/demo-timeout-1
 ```
 
-`--max-time 5` 는 워커 읽기 타임아웃(5초)을 흉내 낸 것이다.
+`--max-time 5` 는 워커 읽기 타임아웃(확인 당시 5초)을 흉내 낸 것이다 — 지금 워커는 3초다(2-1 안내).
 
 | 확인할 것 | 결과 |
 | --- | --- |
@@ -192,7 +196,7 @@ curl -i localhost:8081/external/reservations/by-key/demo-lost-1
 ```
 
 **응답이 오지 않는다.** `mock.timeout-hold-ms`(기본 7000ms) 만큼 붙잡았다가 본문 없는 500 으로
-끝낸다. 워커(5초)는 그 전에 포기한다 — `--max-time 5` 가 워커를 흉내 낸 것이다. 빼고 보내면 7초 뒤
+끝낸다. 워커는 그 전에 포기한다 — `--max-time 5` 가 워커를 흉내 낸 것이다(확인 당시 워커 5초, 지금은 3초 — 2-1 안내). 빼고 보내면 7초 뒤
 빈 500 을 받는데, 그건 워커가 겪는 일이 아니다.
 
 | 확인할 것 | 결과 |
@@ -204,14 +208,14 @@ curl -i localhost:8081/external/reservations/by-key/demo-lost-1
 
 #### 워커가 포기한 뒤 늦은 커밋 (느린 성공 결함) — 확인함 (2026-10-06)
 
-위 둘과 다른 세 번째 결과 불명이다. 지정한 키의 등록이 **커밋 전에** 정한 시간만큼 기다린다. 워커가 5초에 포기하고
+위 둘과 다른 세 번째 결과 불명이다. 지정한 키의 등록이 **커밋 전에** 정한 시간만큼 기다린다. 워커가 타임아웃(지금 3초)에 포기하고
 키 조회를 해도 아직 행이 없어 **404** 인데, 그 뒤에 커밋된다. 같은 키 재시도 · 예약 취소의 취소 표식이 제대로 막는지
 키 하나로 보여 준다. 기다리는 동안은 잠금 전이라 다른 요청이 끼어들 수 있다(api.md 결함 절).
 
 - **결함은 아직 등록하지 않은 키에 건다.** 이미 등록 · 취소된 키에 걸어도 기다리긴 하지만 늦은 커밋은 생기지 않는다
-- **대기는 15초로 건다.** 원래 요청은 지연(약 0.5초) + 15초 뒤에 깨어난다. 워커가 5초에 포기한 뒤 재시도 · 취소를
-  **손으로 쳐도 10초 가까이 여유**가 있다. 6초처럼 짧게 걸면 여유가 1초 남짓이라, 손으로 치는 사이에 원래 요청이
-  먼저 커밋해 결과가 뒤집힌다(① 재시도가 재생을 받고, ② 는 등록이 생긴 뒤에 취소된다)
+- **대기는 15초로 건다.** 원래 요청은 지연(약 0.5초) + 15초 뒤에 깨어난다. 워커가 3초에 포기한 뒤 재시도 · 취소를
+  **손으로 쳐도 12초 넘게 여유**가 있다(확인한 10-06 은 워커 5초라 10초 남짓). 6초처럼 짧게 걸면 여유가 3초 남짓이라,
+  손으로 치는 사이에 원래 요청이 먼저 커밋해 결과가 뒤집히기 쉽다(① 재시도가 재생을 받고, ② 는 등록이 생긴 뒤에 취소된다)
 
 **① 기다리는 동안 같은 키로 재시도 → 행 하나**
 
@@ -222,7 +226,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' \
   -d '{"externalKey":"demo-slow-1","faultType":"SLOW_SUCCESS","delayMs":15000}'
 
-# 워커처럼 5초에 포기한다
+# 워커처럼 포기한다 — 확인 당시 워커 5초. 지금 워커와 같게 하려면 --max-time 3
 curl --max-time 5 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-1' -H 'Content-Type: application/json' \
   -d '{"ourReservationId":"demo-slow-1","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}'
@@ -254,7 +258,7 @@ curl -X PUT localhost:8081/external/config -H 'Content-Type: application/json' \
 curl -X POST localhost:8081/external/faults -H 'Content-Type: application/json' \
   -d '{"externalKey":"demo-slow-2","faultType":"SLOW_SUCCESS","delayMs":15000}'
 
-# 원래 요청 — 결과를 보려고 20초 기다린다(워커라면 5초에 포기). 다른 터미널에서 보내거나 & 로 뒤에 둔다
+# 원래 요청 — 결과를 보려고 20초 기다린다(워커라면 3초에 포기). 다른 터미널에서 보내거나 & 로 뒤에 둔다
 curl --max-time 20 -X POST localhost:8081/external/reservations \
   -H 'Idempotency-Key: demo-slow-2' -H 'Content-Type: application/json' \
   -d '{"ourReservationId":"demo-slow-2","customerRef":"0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d","itemCode":"0199a3f2-7c4e-7b20-9c3e-4f5a6b7c8d9e","optionCode":"SM-G999-256-BLK","qty":1,"scope":"preorder"}' &
@@ -447,20 +451,20 @@ docker compose --profile redis up -d     # MySQL + Redis (Redis 는 이 프로�
 ```bash
 # 터미널마다 포트만 바꾼다 (8081 · 8082 · …)
 java -jar build/libs/nova-0.0.1-SNAPSHOT.jar --server.port=8081 --mock.shared-state=redis \
-  --spring.data.redis.timeout=500ms --spring.data.redis.connect-timeout=1s
+  --spring.data.redis.timeout=500ms --spring.data.redis.connect-timeout=700ms
 ```
 
 `application.yml` 에 `mock.shared-state: redis` 와 `spring.data.redis.host · port · timeout · connect-timeout` 을 적어 두면
 인자를 줄일 수 있다(예시 파일 주석).
 
-**Redis 시간 초과는 꼭 짧게 둔다(`spring.data.redis.timeout: 500ms` · `connect-timeout: 1s`) — 없으면 redis 모드는 뜨지
-않는다.** 둘 중 하나라도 없거나, 두 배가 `worker-read-timeout-ms` 의 절반을 넘으면(기본 5초면 1250ms 초과) 기동 로그에 어느 값인지
+**Redis 시간 초과는 꼭 짧게 둔다(`spring.data.redis.timeout: 500ms` · `connect-timeout: 700ms`) — 없으면 redis 모드는 뜨지
+않는다.** 둘 중 하나라도 없거나, 두 배가 `worker-read-timeout-ms` 의 절반을 넘으면(기본 3초면 750ms 초과) 기동 로그에 어느 값인지
 나오고 멈춘다
 (`RedisTimeoutGuard`). redis 모드는 등록마다
 결함을 Redis 에서 꺼내 본다(결함이 없어도 1~2번). Redis 가 멈추면 그 시간만큼 기다린 뒤에야 결함 없음으로 넘어가는데,
-정하지 않으면 Lettuce 기본 60초라 그동안 모든 등록이 멈추고 워커(읽기 5초)에는 Mock 전체가 먹통으로 보인다. 새 등록
+정하지 않으면 Lettuce 기본 60초라 그동안 모든 등록이 멈추고 워커(읽기 3초)에는 Mock 전체가 먹통으로 보인다. 새 등록
 하나는 결함을 두 번 보므로 시간 초과도 두 번 쌓인다 — 500ms 면 멈춘 Redis 에서 **약 1.1초**(500ms × 2. `RedisFaultSharingTest`
-의 멈춤 시험이 2초 안을 확인한다), 연결부터 안 되면 약 2초(연결 1s × 2)가 더해진다. 둘 다 워커 읽기 5초 안이다. 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
+의 멈춤 시험이 2초 안을 확인한다), 연결부터 안 되면 약 1.4초(연결 700ms × 2)가 더해진다. 둘 다 워커 읽기 3초 안이다. 메모리가 적은 PC 는 `java -Xmx192m -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m …` 로 띄운다 — 5.8GB 노트북에서
 5대가 1.3GB 로 떴다. **한 PC 에 여러 대는 동작 확인용이다.** CPU · 메모리를 나눠 쓰므로 처리량은 늘지 않는다.
 
 **확인** — 한 대에서 바꾸고 다른 서버를 본다.
@@ -530,7 +534,7 @@ curl -i -X POST localhost:8081/external/draws/demo-draw-1/draw \
 | | 값 |
 | --- | --- |
 | 시나리오 | `baseline` · `latency` · `timeout` · `mixed` · `tail` · `tail-over-timeout` (`mixed` 는 baseline 에서 모드만 MIXED — 2-5. 뒤의 둘은 지연 꼬리 — [load-test.md](load-test.md) "지연 꼬리 시나리오") |
-| 패스 | `classify`(분류 판정 · 타임아웃 5초 = 워커 읽기 타임아웃) · `latency`(지연 판정 · 10초) |
+| 패스 | `classify`(분류 판정 · 타임아웃 5초 — 하네스를 만들 때의 워커 값. 운영 워커는 3초, 하네스 반영은 별도 이슈) · `latency`(지연 판정 · 10초) |
 | 건수 | 생략하면 합의값 5,000 |
 | JDBC | 생략하면 `localhost:3307`. **부하를 쏘는 장비가 Mock 과 다르면 반드시 넣는다.** 로컬 MySQL 은 기본으로 그 PC 에서만 받으므로(`compose.yaml`) Mock 장비의 `.env` 에 `MYSQL_BIND=0.0.0.0` 을 넣고, `MYSQL_PASSWORD` · `MYSQL_ROOT_PASSWORD` 를 기본값에서 바꾸고 `application.yml` 의 datasource `password` 도 같은 값으로 고친 뒤 **`docker compose down -v` → `docker compose up -d` 로 DB 를 새로 만든다.** 계정 · 비밀번호는 볼륨을 처음 만들 때만 정해져, 이미 만든 DB 는 `.env` 만 고쳐서는 기본 비밀번호(nova · root) 그대로 같은 망의 누구나 닿는다. 데이터를 남겨야 하면 `ALTER USER` 로 두 계정의 비밀번호를 직접 바꾼다. 계정 · 비밀번호 인자도 새 값으로 넣고, 시험이 끝나면 되돌린다 |
 | `--warmup` | 예열 실행. 보고서 제목과 파일 이름(`warmup-…`)에 표시되고, 판정과 상관없이 0 으로 끝난다 |
