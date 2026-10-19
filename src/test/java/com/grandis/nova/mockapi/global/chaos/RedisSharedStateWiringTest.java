@@ -23,7 +23,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         "mock.shared-state=redis",
         // redis 모드는 시간 초과가 없으면 뜨지 않는다(RedisTimeoutGuard). 설정 예시의 권장값과 같다
         "spring.data.redis.timeout=500ms",
-        "spring.data.redis.connect-timeout=1s"
+        "spring.data.redis.connect-timeout=700ms"
 })
 class RedisSharedStateWiringTest {
 

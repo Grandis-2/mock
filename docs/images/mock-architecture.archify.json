@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "외부 예약 Mock 아키텍처",
+    "locale": "ko",
+    "output": "build/archify/mock-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Grandis-Nova/mock.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "950e42168199410c8f96a9b253ef93c9a0d3bd13"
+    }
+  },
+  "components": [
+    {
+      "id": "worker",
+      "type": "external",
+      "label": "worker",
+      "sublabel": "본 서비스 · 읽기 3초",
+      "pos": [
+        40,
+        200
+      ],
+      "size": [
+        130,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docs/api.md",
+          "line": 62,
+          "label": "errorCode 로 분기"
+        },
+        {
+          "path": "docs/api.md",
+          "line": 91,
+          "label": "워커가 하는 일"
+        }
+      ]
+    },
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "운영자 · 시연",
+      "sublabel": "조작 패널",
+      "pos": [
+        230,
+        480
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docs/operations.md",
+          "line": 83,
+          "label": "시연 조작 패널"
+        }
+      ]
+    },
+    {
+      "id": "registration",
+      "type": "backend",
+      "label": "registration",
+      "sublabel": "예약 원장 · 멱등 판정",
+      "pos": [
+        560,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/registration/api/RegistrationController.java",
+          "line": 31,
+          "end_line": 33,
+          "label": "/external/reservations"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/registration/application/RegistrationService.java",
+          "line": 45,
+          "end_line": 60,
+          "label": "주입 · 결함 호출"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/registration/application/RegistrationWriter.java",
+          "line": 45,
+          "end_line": 58,
+          "label": "잠금 읽기 · 저장"
+        }
+      ]
+    },
+    {
+      "id": "draw",
+      "type": "backend",
+      "label": "draw",
+      "sublabel": "럭키드로우 응모 · 추첨",
+      "pos": [
+        560,
+        360
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/draw/api/DrawEntryController.java",
+          "line": 25,
+          "end_line": 27,
+          "label": "/external/draw-entries"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/draw/api/DrawController.java",
+          "line": 22,
+          "end_line": 24,
+          "label": "/external/draws"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/draw/application/DrawEntryWriter.java",
+          "line": 48,
+          "end_line": 74,
+          "label": "회차 잠금 · 응모 저장"
+        }
+      ]
+    },
+    {
+      "id": "control",
+      "type": "backend",
+      "label": "control",
+      "sublabel": "설정 · 결함 · 초기화 API",
+      "pos": [
+        230,
+        200
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/control/api/MockConfigController.java",
+          "line": 47,
+          "end_line": 51,
+          "label": "설정 변경"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/control/api/FaultController.java",
+          "line": 48,
+          "end_line": 54,
+          "label": "결함 걸기"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/control/application/ResetService.java",
+          "line": 65,
+          "end_line": 71,
+          "label": "초기화 삭제"
+        }
+      ]
+    },
+    {
+      "id": "chaos",
+      "type": "backend",
+      "label": "global/chaos",
+      "sublabel": "지연 · 실패 · 결함 주입",
+      "pos": [
+        560,
+        200
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/global/chaos/MockConfigStore.java",
+          "line": 20,
+          "label": "설정 보관"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/global/chaos/DefaultFailureInjector.java",
+          "line": 30,
+          "label": "지연 · 실패 주입"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/global/chaos/InMemoryFaultStore.java",
+          "line": 17,
+          "end_line": 61,
+          "label": "결함 보관 · 발동"
+        }
+      ]
+    },
+    {
+      "id": "mysql",
+      "type": "database",
+      "label": "MySQL",
+      "sublabel": "external_mock",
+      "pos": [
+        1060,
+        200
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "db/migrations/V202610121500__init_external_mock.sql",
+          "line": 9,
+          "end_line": 36,
+          "label": "preorder_registrations"
+        },
+        {
+          "path": "db/migrations/V202610141200__create_lucky_draw.sql",
+          "line": 6,
+          "end_line": 45,
+          "label": "draws · draw_entries"
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "mock:config · mock:faults",
+      "pos": [
+        870,
+        200
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/global/chaos/RedisConfigSync.java",
+          "line": 46,
+          "end_line": 50,
+          "label": "설정 공유 (redis 모드)"
+        },
+        {
+          "path": "src/main/java/com/grandis/nova/mockapi/global/chaos/RedisFaultStorage.java",
+          "line": 28,
+          "end_line": 36,
+          "label": "결함 공유 (redis 모드)"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Mock 서버 (Spring Boot)",
+      "wraps": [
+        "registration",
+        "draw",
+        "control",
+        "chaos"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "worker-registration",
+      "from": "worker",
+      "to": "registration",
+      "label": "등록 · 키 조회 · 취소",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "worker-draw",
+      "from": "worker",
+      "to": "draw",
+      "label": "응모 · 추첨",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          105,
+          600
+        ],
+        [
+          650,
+          600
+        ]
+      ]
+    },
+    {
+      "id": "operator-control",
+      "from": "operator",
+      "to": "control",
+      "label": "설정 · 결함 · 초기화"
+    },
+    {
+      "id": "registration-mysql",
+      "from": "registration",
+      "to": "mysql",
+      "label": "원장 쓰기"
+    },
+    {
+      "id": "draw-mysql",
+      "from": "draw",
+      "to": "mysql",
+      "label": "회차 · 응모 쓰기"
+    },
+    {
+      "id": "registration-chaos",
+      "from": "registration",
+      "to": "chaos",
+      "label": "지연 · 실패 · 결함"
+    },
+    {
+      "id": "draw-chaos",
+      "from": "draw",
+      "to": "chaos",
+      "label": "지연 · 실패"
+    },
+    {
+      "id": "control-chaos",
+      "from": "control",
+      "to": "chaos",
+      "label": "설정 · 결함 바꾸기"
+    },
+    {
+      "id": "chaos-redis",
+      "from": "chaos",
+      "to": "redis",
+      "label": "redis 모드에서만"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "memory · redis 모드",
+      "items": [
+        "기본 memory: 설정과 결함이 서버마다 메모리에 있다",
+        "redis: 여러 대가 Redis 로 나눠, 한 대에서 바꿔도 모두 적용된다"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "그림에 없는 연결",
+      "items": [
+        "초기화는 control 이 원장 · 회차 · 응모를 지우고 결함도 비운다 (설정은 남김)",
+        "부하 하네스(./gradlew loadTest)는 같은 API 를 부르고, 판정 때 원장을 JDBC 로 직접 읽는다"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "패키지 규칙",
+      "items": [
+        "패키지 안은 api → application → domain 한 방향으로만 의존한다"
+      ]
+    }
+  ]
+}
