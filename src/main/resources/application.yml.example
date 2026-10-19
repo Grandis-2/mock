@@ -25,7 +25,7 @@ spring:
     username: nova
     password: nova
     hikari:
-      # 등록 · 취소 · 키 조회는 코드가 트랜잭션마다 READ COMMITTED 를 정한다(design.md).
+      # 등록 · 취소 · 키 조회는 코드가 트랜잭션마다 READ COMMITTED 를 정한다(README 「설계와 기술 특이점」 1).
       # 여기 값은 그 밖의 쿼리(초기화 등)의 기본값이다.
       transaction-isolation: TRANSACTION_READ_COMMITTED
       # 20 은 500 RPS 에서 병목이었다. 요청이 커넥션을 기다리며 쌓여 최대 동시가 이론값의
