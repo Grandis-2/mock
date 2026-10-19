@@ -34,7 +34,7 @@
 ![외부 예약 Mock 아키텍처: worker와 운영자가 registration · draw · control을 부르고, 세 패키지가 global/chaos를 거쳐 MySQL · Redis에 닿는다](docs/images/mock-architecture.svg)
 
 - 부하 하네스(`./gradlew loadTest`)도 같은 API를 부르고, 판정할 때는 원장을 JDBC로 직접 읽습니다.
-- Redis는 여러 대(`mock.shared-state=redis`)로 띄울 때만 씁니다. 운영은 ECS 2 ~ 5대입니다.
+- Redis는 여러 대(`mock.shared-state=redis`)로 띄울 때만 씁니다. 운영은 평소 1대이고 부하 시험 때 오토스케일링으로 최대 5대까지 늘어나서, redis 모드로 돕니다.
 
 | 패키지 | 맡은 일 |
 | --- | --- |
@@ -156,7 +156,7 @@ Mock이 하는 일의 대부분은 일부러 기다리는 것입니다(평균 50
 
 ### 4. 여러 대에서 설정 · 결함 공유 (Redis + Lua)
 
-기본(`memory`)은 설정과 결함이 서버마다 메모리에 있어서, 여러 대면 바꾼 서버에만 적용됩니다. 운영처럼 여러 대면 `mock.shared-state=redis`로 Redis에 두고 나눕니다.
+기본(`memory`)은 설정과 결함이 서버마다 메모리에 있어서, 여러 대면 바꾼 서버에만 적용됩니다. 여러 대로 늘어날 수 있으면(운영은 평소 1대, 최대 5대) `mock.shared-state=redis`로 Redis에 두고 나눕니다.
 
 | 대상 | 방법 |
 | --- | --- |
@@ -218,10 +218,10 @@ sequenceDiagram
     M-->>W: 받은 응모 수
     W->>M: POST /external/draws/drawId/draw (winnerCount · expectedEntryCount)
     M->>D: 회차 행 잠금
-    alt 받은 수 ≠ 기대 수
+    alt 이미 추첨한 회차
+        M-->>W: 같은 요청이면 200 재생 (같은 당첨자) · 다르면 422 KEY_PAYLOAD_MISMATCH
+    else 받은 수 ≠ 기대 수
         M-->>W: 409 ENTRY_COUNT_MISMATCH → 늦춰서 다시
-    else 이미 추첨한 회차
-        M-->>W: 200 재생 (같은 당첨자)
     else 처음 추첨
         M->>D: SecureRandom 으로 뽑고 DRAWN
         M-->>W: 200 winnerEntryIds

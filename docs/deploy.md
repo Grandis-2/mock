@@ -27,7 +27,7 @@ release:  build ──→ image ──┬─→ migrate ──→ deploy
 - `_image` 는 마이그레이션 이미지가 만든 표로 Mock 을 띄워 등록 · 조회 · 취소 요청의 응답 코드까지 본다. 표와 엔티티가
   다르면(`ddl-auto: validate`) 여기서 멈춘다 — 운영 DB 에 적용하기 전이다.
 - 배포는 새 태스크가 자리 잡을 때까지 기다리고, 그 태스크가 이번에 올린 이미지(digest)로 도는지 확인한다.
-  운영은 Mock 을 여러 대(2 ~ 5대, 인프라 `mock/service.yml`)로 두고 rolling 으로 배포한다.
+  운영은 Mock 을 평소 1대로 두고 부하 시험 때 오토스케일링으로 최대 5대까지 늘리며(인프라 `mock/service.yml`), rolling 으로 배포한다.
 - 액션은 커밋 SHA 로, 컨테이너 이미지는 digest 로 고정한다.
 
 ## 이미지
