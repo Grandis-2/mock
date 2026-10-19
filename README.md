@@ -305,3 +305,5 @@ flowchart LR
 | [docs/deploy.md](docs/deploy.md) | 빌드 · 배포: 워크플로 · 이미지 · 스키마 변경 |
 | [db/migrations](db/migrations) | **스키마 정본**: 운영 DB의 표(Flyway, 배포 때 적용) |
 | [docs/schema.sql](docs/schema.sql) | 같은 표를 한 파일로 모은 것: 로컬 compose · MySQL 시험용. 표를 바꾸면 마이그레이션과 함께 고칩니다 |
+
+api · operations · deploy를 장마다 나눠 읽기 편하게 옮긴 사본은 [위키](https://github.com/Grandis-2/mock/wiki)에 있습니다. 내용을 바꿀 때는 위 저장소 파일을 고칩니다.
