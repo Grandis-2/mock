@@ -27,7 +27,7 @@ release:  build ──→ image ──┬─→ migrate ──→ deploy
 - `_image` 는 마이그레이션 이미지가 만든 표로 Mock 을 띄워 등록 · 조회 · 취소 요청의 응답 코드까지 본다. 표와 엔티티가
   다르면(`ddl-auto: validate`) 여기서 멈춘다 — 운영 DB 에 적용하기 전이다.
 - 배포는 새 태스크가 자리 잡을 때까지 기다리고, 그 태스크가 이번에 올린 이미지(digest)로 도는지 확인한다.
-  인프라가 Mock 을 한 대(singleton)로 두는 동안은 배포하는 사이 잠시 응답하지 않는다.
+  운영은 Mock 을 여러 대(2 ~ 5대, 인프라 `mock/service.yml`)로 두고 rolling 으로 배포한다.
 - 액션은 커밋 SHA 로, 컨테이너 이미지는 digest 로 고정한다.
 
 ## 이미지
@@ -66,17 +66,18 @@ bash db/verify.sh
 ## 인프라가 준비할 것
 
 이 저장소의 워크플로는 아래가 있다고 보고 돈다. 이름은 `release.yml` 에만 적혀 있다.
+지금은 모두 있다 — 첫 release(2026-10-14)가 운영 DB 에 마이그레이션을 적용했고, 다음 release(2026-10-15, NV-533)가 배포까지 마쳤다.
 
 | 무엇 | 이름 | 지금 |
 | --- | --- | --- |
-| GitHub 변수 · 시크릿 | 변수 `AWS_REGION` · 시크릿 `AWS_ROLE_ARN` | 둘 다 아직 없다 |
-| 배포 역할의 신뢰 대상 | 이 저장소의 `main` — `repo:Grandis-2@336932992/mock@1365107413:ref:refs/heads/main` | be 저장소만 들어 있다 |
-| Mock 이미지 저장소 | `nova/mock` | `application/mock/service.yml` 로 생긴다 |
-| Mock 서비스 | `nova-prod` 클러스터의 `nova-prod-mock` | `deploy: false` — 없으면 배포를 건너뛰고 이미지만 올린다 |
-| 마이그레이션 이미지 저장소 | `nova/mock-migration` | 없다 |
-| 마이그레이션 태스크 정의 | be 의 `nova-prod-migration` 과 같되 이미지와 접속 주소(`/external_mock`)만 다르다 | 없다 |
-| 태스크를 띄울 값 | SSM `/nova-prod/mock-migration/run-task` (be 의 `/nova-prod/migration/run-task` 와 같은 모양) | 없다 |
-| 배포 역할의 권한 | 위 두 저장소에 올리기 · 위 태스크 띄우기 · 위 파라미터와 그 로그 읽기 | 없다 |
+| GitHub 변수 · 시크릿 | 변수 `AWS_REGION` · 시크릿 `AWS_ROLE_ARN` | 있다 |
+| 배포 역할의 신뢰 대상 | 이 저장소의 `main` — `repo:Grandis-2@336932992/mock@1365107413:ref:refs/heads/main` | 있다 |
+| Mock 이미지 저장소 | `nova/mock` | 있다(`application/mock/service.yml` 로 생긴다) |
+| Mock 서비스 | `nova-prod` 클러스터의 `nova-prod-mock` | 있다(`deploy: true`). 없으면 배포를 건너뛰고 이미지만 올린다 |
+| 마이그레이션 이미지 저장소 | `nova/mock-migration` | 있다 |
+| 마이그레이션 태스크 정의 | be 의 `nova-prod-migration` 과 같되 이미지와 접속 주소(`/external_mock`)만 다르다 | 있다 |
+| 태스크를 띄울 값 | SSM `/nova-prod/mock-migration/run-task` (be 의 `/nova-prod/migration/run-task` 와 같은 모양) | 있다 |
+| 배포 역할의 권한 | 위 두 저장소에 올리기 · 위 태스크 띄우기 · 위 파라미터와 그 로그 읽기 | 있다 |
 
 실행 역할 · 보안 그룹 · 서브넷 · `nova_migrator` 계정은 be 의 마이그레이션 태스크 것을 그대로 쓰면 된다.
 태스크 정의만 따로 둔다 — 이미지와 접속 주소가 태스크 정의에 들어 있고, 띄울 때 이미지는 바꿀 수 없다.
