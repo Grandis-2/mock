@@ -1,6 +1,6 @@
 # 빌드 · 배포
 
-`main` 에 들어간 커밋만 이미지가 되고, 운영 DB(NCP `external_mock`)에 마이그레이션을 먼저 적용한 뒤 ECS 의 Mock 이
+`main` 에 들어간 커밋만 이미지가 되고, 운영 DB(RDS `external_mock`)에 마이그레이션을 먼저 적용한 뒤 ECS 의 Mock 이
 그 이미지로 다시 뜬다. be 의 release 와 같은 방식이다(ECR 에 올리고 `force-new-deployment`).
 
 ## 워크플로

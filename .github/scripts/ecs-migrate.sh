@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 운영 DB(NCP)의 external_mock 에 마이그레이션을 적용한다. Flyway 태스크를 ECS 에서 한 번 띄우고 끝날 때까지 기다린다.
-# DB 는 AWS NAT 고정 IP 만 받아 러너에서는 닿지 않으므로 클러스터 안에서 돈다. be 의 ecs-migrate.sh 와 같은 방식이다.
+# 운영 DB(RDS)의 external_mock 에 마이그레이션을 적용한다. Flyway 태스크를 ECS 에서 한 번 띄우고 끝날 때까지 기다린다.
+# DB 는 VPC 안에 있고 공개되지 않아 러너에서는 닿지 않으므로 클러스터 안에서 돈다. be 의 ecs-migrate.sh 와 같은 방식이다.
 # 띄울 태스크 정의 · 서브넷 · SG 는 인프라가 SSM 파라미터에 적는다. 이 스크립트는 그 값을 읽기만 한다.
 #
 # 사용: ECS_CLUSTER=nova-prod MIGRATION_PARAM=/nova-prod/mock-migration/run-task ecs-migrate.sh check | run
