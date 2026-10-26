@@ -15,9 +15,9 @@ class LoadPlanTest {
 
     private static final String URL = "http://localhost:8081";
 
-    /** be 워커 read-timeout 5s 와 같아야 워커가 겪을 결과를 센다(docs/api.md). */
+    /** 하네스를 만들 때의 워커 값이다. 유지 시간(7초)보다 짧아 결과 불명을 그대로 센다(docs/operations.md 3-3). */
     @Test
-    @DisplayName("분류 판정의 응답 타임아웃은 워커 읽기 타임아웃 5초다")
+    @DisplayName("분류 판정의 응답 타임아웃은 하네스 기준 5초다")
     void classifyMatchesWorkerTimeout() {
         assertThat(LoadPlan.classify(URL, 5_000).responseTimeout()).isEqualTo(Duration.ofSeconds(5));
     }
