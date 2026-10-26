@@ -496,7 +496,7 @@ public final class LoadReport {
         out.append("> 응답 타임아웃 ").append(plan.responseTimeout().toSeconds())
                 .append("초는 ")
                 .append(plan.pass() == LoadPlan.Pass.CLASSIFY
-                        ? "워커 읽기 타임아웃이다(be worker read-timeout 5s · api.md 계약). 워커가 겪을 결과를 센다."
+                        ? "하네스를 만들 때의 워커 읽기 타임아웃이다(지금 워커는 3초). 유지 시간보다 먼저 포기하므로 결과 불명을 그대로 센다."
                         : "백분위가 잘리지 않게 넉넉히 둔 값이다. 분류는 참고로만 본다.")
                 .append("\n\n");
 
